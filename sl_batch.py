@@ -1,4 +1,5 @@
 from importlib import import_module
+import os
 from recurrent_wrappers.create_models import create_model
 import numpy as np
 import torch.nn as nn
@@ -26,7 +27,8 @@ class Agent(nn.Module):
 def run_experiment(
         train, evaluate, input_dim, output_dim, num_seeds=1,
         seq_lens=[40], rnn_list=['lru', 'glru'], rnn_mode='sequential',
-        train_kwargs=None, eval_kwargs=None
+        train_kwargs=None, eval_kwargs=None, task_name=None, vocab_size=None,
+        exp_id=None, exp_desc=None
     ):
     seeds = list(range(num_seeds))
 
@@ -59,9 +61,16 @@ def run_experiment(
             results[rnn].append(mean_score)
             print(f"Eval Mean Success: {mean_score:.2f}")
 
-    plot_results(seq_lens, results)
+    plot_results(
+        seq_lens,
+        results,
+        task_name=task_name,
+        vocab_size=vocab_size,
+        exp_id=exp_id,
+        exp_desc=exp_desc,
+    )
 
-def plot_results(seq_lens, results):
+def plot_results(seq_lens, results, task_name=None, vocab_size=None, exp_id=None, exp_desc=None):
     plt.figure(figsize=(7, 5))
     for model_name, scores in results.items():
         plt.plot(seq_lens, scores, marker="o", label=model_name)
@@ -71,7 +80,15 @@ def plot_results(seq_lens, results):
     plt.legend()
     plt.grid(True)
     plt.tight_layout()
-    plt.show()
+    if exp_id is not None and task_name is not None and vocab_size is not None:
+        folder_name = f"data_sl/exp_{exp_id}_{task_name}_{vocab_size}"
+        os.makedirs(folder_name, exist_ok=True)
+        plot_path = os.path.join(folder_name, f"plot_{exp_id}.jpg")
+        plt.savefig(plot_path, dpi=200)
+        desc_path = os.path.join(folder_name, f"desc_{exp_id}.txt")
+        with open(desc_path, "w", encoding="utf-8") as desc_file:
+            desc_file.write((exp_desc or "") + "\n")
+    # plt.show()
 
 def set_seed(seed):
     import random, numpy, torch
@@ -111,7 +128,16 @@ def load_task(task_name, vocab_size=None):
         }
     return task
 
-def run_task(task_name, vocab_size=None, num_seeds=1, seq_lens=None, rnn_list=None, rnn_mode="sequential"):
+def run_task(
+    task_name,
+    vocab_size=None,
+    num_seeds=1,
+    seq_lens=None,
+    rnn_list=None,
+    rnn_mode="sequential",
+    exp_id=None,
+    exp_desc=None,
+):
     task = load_task(task_name, vocab_size=vocab_size)
     run_experiment(
         task["train"],
@@ -124,6 +150,10 @@ def run_task(task_name, vocab_size=None, num_seeds=1, seq_lens=None, rnn_list=No
         rnn_mode=rnn_mode,
         train_kwargs=task.get("train_kwargs"),
         eval_kwargs=task.get("eval_kwargs"),
+        task_name=task_name,
+        vocab_size=vocab_size,
+        exp_id=exp_id,
+        exp_desc=exp_desc,
     )
 
 if __name__ == "__main__":
@@ -131,10 +161,12 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--task", type=str, default="repeat_first_one")
     parser.add_argument("--vocab-size", type=int, default=2)
-    parser.add_argument("--num-seeds", type=int, default=3)
+    parser.add_argument("--num-seeds", type=int, default=1)
     parser.add_argument("--seq-lens", type=int, nargs="*", default=[5])
-    parser.add_argument("--rnn-list", type=str, nargs="*", default=["glru", "lru", "gru", "rnn"])
-    parser.add_argument("--rnn-mode", type=str, default="act")
+    parser.add_argument("--rnn-list", type=str, nargs="*", default=["glru"])
+    parser.add_argument("--rnn-mode", type=str, default="sequential")
+    parser.add_argument("--exp-id", type=int, default=0)
+    parser.add_argument("--exp-desc", type=str, default=None)
     
     args = parser.parse_args()
     run_task(
@@ -144,4 +176,6 @@ if __name__ == "__main__":
         seq_lens=args.seq_lens,
         rnn_list=args.rnn_list,
         rnn_mode=args.rnn_mode,
+        exp_id=args.exp_id,
+        exp_desc=args.exp_desc,
     )
