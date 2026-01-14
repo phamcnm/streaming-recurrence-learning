@@ -16,9 +16,9 @@ input_dim = vocab_size + 1
 output_dim = 1
 def sampler(seq_len, vocab_size=vocab_size):
     """
-    Sample (x, q, target)
+    Sample (x, q, target_pct)
     first, q and target are sampled uniformly
-    then, x is constructed with such q and target
+    then, x is constructed with such target
     """
     q = torch.randint(1, vocab_size + 1, (1,), dtype=torch.long).item()
     target = torch.randint(0, seq_len + 1, (1,), dtype=torch.long).item()
@@ -33,7 +33,8 @@ def sampler(seq_len, vocab_size=vocab_size):
         if target > 0:
             idx = torch.randperm(seq_len)[:target]
             x[idx] = q
-    return x, q, target
+    target_pct = target / seq_len
+    return x, q, target_pct
 
 class CountRecallDataset(Dataset):
     def __init__(self, num_samples=1000, seq_len=10, vocab_size=vocab_size):
@@ -42,18 +43,18 @@ class CountRecallDataset(Dataset):
         self.vocab_size = vocab_size
     def __len__(self): return self.num_samples
     def __getitem__(self, idx):
-        x, q, target = sampler(seq_len=self.seq_len, vocab_size=self.vocab_size)
+        x, q, target_pct = sampler(seq_len=self.seq_len, vocab_size=self.vocab_size)
         q_tensor = torch.tensor([q], dtype=torch.long)
         x_input = torch.cat([x, q_tensor], dim=0)  # (seq_len + 1,)
-        y = torch.tensor(float(target)).repeat(self.seq_len + 1)
+        y = torch.tensor(float(target_pct)).repeat(self.seq_len + 1)
         return x_input, y
     
-def train(model, seq_len, vocab_size=vocab_size, act_loss_coeff=0.01):
-    dataset = CountRecallDataset(num_samples=10000, seq_len=seq_len, vocab_size=vocab_size)
+def train(model, seq_len, vocab_size=vocab_size, num_samples=10000, num_epochs=10, act_loss_coeff=0.01):
+    dataset = CountRecallDataset(num_samples=num_samples, seq_len=seq_len, vocab_size=vocab_size)
     loader = DataLoader(dataset, batch_size=32, shuffle=True)
     optimizer = torch.optim.Adam(model.parameters(), lr=3e-4)
     loss_fn = nn.MSELoss()
-    for epoch in range(10):
+    for epoch in range(num_epochs):
         epoch_aux_accumulator = None
         num_batches = 0
         for x, y in loader:
@@ -84,15 +85,15 @@ def train(model, seq_len, vocab_size=vocab_size, act_loss_coeff=0.01):
 def evaluate(model, seq_len, vocab_size=vocab_size, n=10, show_results=True):
     errors = []
     for _ in range(n):
-        x, q, target = sampler(seq_len=seq_len, vocab_size=vocab_size)
+        x, q, target_pct = sampler(seq_len=seq_len, vocab_size=vocab_size)
         x_seq = x.view(seq_len, 1)
         q_tensor = torch.tensor([[q]], dtype=torch.long)
         x_input = torch.cat([x_seq, q_tensor], dim=0)
         preds, hidden, aux = model(x_input)
         pred = preds[-1, 0, 0].item()
-        errors.append(abs(pred - target))
+        errors.append(abs(pred - target_pct))
         if show_results:
-            print(f"ponder={format_aux(aux)} | x={x.tolist()} | q={q} | target={target} | pred={pred}")
+            print(f"ponder={format_aux(aux)} | x={x.tolist()} | q={q} | target={target_pct} | pred={pred}")
     return sum(errors) / n
 
 TASK = {

@@ -39,14 +39,14 @@ class CopyingTaskDataset(Dataset):
         y[-self.S:] = u                                         # target suffix
         return x, y
     
-def train(model, seq_len, vocab_size=vocab_size, S=S, act_loss_coeff=0.01):
+def train(model, seq_len, vocab_size=vocab_size, S=S, num_samples=10_000, num_epochs=10, act_loss_coeff=0.01):
     T = seq_len
     batch_size = 32
-    dataset = CopyingTaskDataset(num_samples=10_000, T=T, vocab_size=vocab_size, S=S)
+    dataset = CopyingTaskDataset(num_samples=num_samples, T=T, vocab_size=vocab_size, S=S)
     loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
     optimizer = torch.optim.Adam(model.parameters(), lr=3e-4)
     loss_fn = nn.CrossEntropyLoss()
-    for epoch in range(10):
+    for epoch in range(num_epochs):
         epoch_aux_accumulator = None
         num_batches = 0
         for x, y in loader:

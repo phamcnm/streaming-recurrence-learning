@@ -31,14 +31,14 @@ class RepeatFirstOneDataset(Dataset):
         return x, y
 
 
-def train(model, seq_len, vocab_size=vocab_size, act_loss_coeff=0.01):
-    dataset = RepeatFirstOneDataset(num_samples=10_000, seq_len=seq_len, vocab_size=vocab_size)
+def train(model, seq_len, vocab_size=vocab_size, num_samples=10_000, num_epochs=10, act_loss_coeff=0.01):
+    dataset = RepeatFirstOneDataset(num_samples=num_samples, seq_len=seq_len, vocab_size=vocab_size)
     loader = DataLoader(dataset, batch_size=32, shuffle=True)
 
     optimizer = torch.optim.Adam(model.parameters(), lr=3e-4)
     loss_fn = nn.CrossEntropyLoss()
 
-    for epoch in range(10):
+    for epoch in range(num_epochs):
         epoch_aux_accumulator = None
         num_batches = 0
         for x, y in loader:
