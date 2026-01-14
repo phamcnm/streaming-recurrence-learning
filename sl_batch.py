@@ -33,7 +33,7 @@ def run_experiment(
     seeds = list(range(num_seeds))
 
     embed_dim = 64
-    hidden_dim = 256
+    hidden_dim = 128
     train_kwargs = train_kwargs or {}
     eval_kwargs = eval_kwargs or {}
 
@@ -137,8 +137,15 @@ def run_task(
     rnn_mode="sequential",
     exp_id=None,
     exp_desc=None,
+    num_epochs=None,
+    num_samples=None,
 ):
     task = load_task(task_name, vocab_size=vocab_size)
+    train_kwargs = dict(task.get("train_kwargs") or {})
+    if num_epochs is not None:
+        train_kwargs["num_epochs"] = num_epochs
+    if num_samples is not None:
+        train_kwargs["num_samples"] = num_samples
     run_experiment(
         task["train"],
         task["evaluate"],
@@ -148,7 +155,7 @@ def run_task(
         seq_lens=seq_lens,
         rnn_list=rnn_list,
         rnn_mode=rnn_mode,
-        train_kwargs=task.get("train_kwargs"),
+        train_kwargs=train_kwargs,
         eval_kwargs=task.get("eval_kwargs"),
         task_name=task_name,
         vocab_size=vocab_size,
@@ -159,14 +166,16 @@ def run_task(
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument("--task", type=str, default="repeat_first_one")
-    parser.add_argument("--vocab-size", type=int, default=2)
+    parser.add_argument("--task", type=str, default="average")
+    parser.add_argument("--vocab-size", type=int, default=3)
     parser.add_argument("--num-seeds", type=int, default=1)
-    parser.add_argument("--seq-lens", type=int, nargs="*", default=[5])
-    parser.add_argument("--rnn-list", type=str, nargs="*", default=["glru"])
+    parser.add_argument("--seq-lens", type=int, nargs="*", default=[10])
+    parser.add_argument("--rnn-list", type=str, nargs="*", default=["glru_min"])
     parser.add_argument("--rnn-mode", type=str, default="sequential")
     parser.add_argument("--exp-id", type=int, default=0)
     parser.add_argument("--exp-desc", type=str, default=None)
+    parser.add_argument("--num-epochs", type=int, default=None)
+    parser.add_argument("--num-samples", type=int, default=None)
     
     args = parser.parse_args()
     run_task(
@@ -178,4 +187,6 @@ if __name__ == "__main__":
         rnn_mode=args.rnn_mode,
         exp_id=args.exp_id,
         exp_desc=args.exp_desc,
+        num_epochs=args.num_epochs,
+        num_samples=args.num_samples,
     )
