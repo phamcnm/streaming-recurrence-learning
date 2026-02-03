@@ -46,7 +46,7 @@ class Args:
     """the id of the environment"""
     corridor_length: int = 10
     """corridor length for TMaze"""
-    total_timesteps: int = 1000000
+    total_timesteps: int = 2000000
     """total timesteps of the experiments"""
     hidden_size: int = 64
     """hidden size of the agent"""
@@ -54,7 +54,7 @@ class Args:
     """the learning rate of the optimizer"""
     num_envs: int = 8
     """the number of parallel game environments"""
-    num_steps: int = 100
+    num_steps: int = 200
     """the number of steps to run in each environment per policy rollout"""
     num_sequences: int = 5
     """the number of sequences an environment's rollout is split into for training per epoch"""
