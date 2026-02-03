@@ -13,6 +13,7 @@ class Agent(nn.Module):
             name=rnn_name,
             embed_dim=embed_dim,
             hidden_dim=hidden_dim,
+            arch='memora',
             rnn_mode=rnn_mode,
             layernorm=False
         )
@@ -166,16 +167,16 @@ def run_task(
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument("--task", type=str, default="average")
+    parser.add_argument("--task", type=str, default="repeat_previous")
     parser.add_argument("--vocab-size", type=int, default=3)
     parser.add_argument("--num-seeds", type=int, default=1)
     parser.add_argument("--seq-lens", type=int, nargs="*", default=[10])
-    parser.add_argument("--rnn-list", type=str, nargs="*", default=["glru_min"])
+    parser.add_argument("--rnn-list", type=str, nargs="*", default=['glru', 'lru'])
     parser.add_argument("--rnn-mode", type=str, default="sequential")
     parser.add_argument("--exp-id", type=int, default=0)
     parser.add_argument("--exp-desc", type=str, default=None)
-    parser.add_argument("--num-epochs", type=int, default=None)
-    parser.add_argument("--num-samples", type=int, default=None)
+    parser.add_argument("--num-epochs", type=int, default=20)
+    parser.add_argument("--num-samples", type=int, default=20000)
     
     args = parser.parse_args()
     run_task(

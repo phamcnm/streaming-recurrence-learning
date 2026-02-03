@@ -12,7 +12,7 @@ class RNNWrapper(nn.Module):
             self.ln1 = nn.LayerNorm(embed_dim, elementwise_affine=False)
             self.ln2 = nn.LayerNorm(hidden_dim, elementwise_affine=False)
 
-    def forward(self, x, h=None):
+    def forward(self, x, h=None, done=None):
         x = self.ln1(x) if self.layernorm else x
         x, h = self.rnn(x)        # (T, B, H)
         x = self.ln2(x) if self.layernorm else x

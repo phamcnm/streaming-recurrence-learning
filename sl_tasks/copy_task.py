@@ -12,7 +12,7 @@ from sl_batch import run_experiment
 from utils import format_aux
 
 vocab_size = 5
-S = 5
+S = 3
 blank_id = 0
 delim_id = 1
 input_dim = vocab_size + 1

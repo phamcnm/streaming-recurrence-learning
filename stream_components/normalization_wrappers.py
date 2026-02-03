@@ -46,6 +46,23 @@ class NormalizeObservation(gym.Wrapper, gym.utils.RecordConstructorArgs):
         else:
             self.obs_stats = SampleMeanStd(shape=self.observation_space.shape)
         self.epsilon = epsilon
+        self._ensure_float_observation_space()
+
+    def _ensure_float_observation_space(self):
+        if isinstance(self.observation_space, gym.spaces.Box):
+            self.observation_space = gym.spaces.Box(
+                low=-np.inf,
+                high=np.inf,
+                shape=self.observation_space.shape,
+                dtype=np.float32,
+            )
+        if hasattr(self, "single_observation_space") and isinstance(self.single_observation_space, gym.spaces.Box):
+            self.single_observation_space = gym.spaces.Box(
+                low=-np.inf,
+                high=np.inf,
+                shape=self.single_observation_space.shape,
+                dtype=np.float32,
+            )
 
     def step(self, action):
         obs, rews, terminateds, truncateds, infos = self.env.step(action)
@@ -64,7 +81,8 @@ class NormalizeObservation(gym.Wrapper, gym.utils.RecordConstructorArgs):
 
     def normalize(self, obs):
         self.obs_stats.update(obs)
-        return (obs - self.obs_stats.mean) / np.sqrt(self.obs_stats.var + self.epsilon)
+        normalized = (obs - self.obs_stats.mean) / np.sqrt(self.obs_stats.var + self.epsilon)
+        return normalized.astype(np.float32, copy=False)
 
 class ScaleReward(gym.core.Wrapper, gym.utils.RecordConstructorArgs):
     def __init__(self, env: gym.Env, gamma: float = 0.99, epsilon: float = 1e-8):
@@ -80,6 +98,23 @@ class ScaleReward(gym.core.Wrapper, gym.utils.RecordConstructorArgs):
         self.reward_trace = np.zeros(self.num_envs)
         self.gamma = gamma
         self.epsilon = epsilon
+        self._ensure_float_observation_space()
+
+    def _ensure_float_observation_space(self):
+        if isinstance(self.observation_space, gym.spaces.Box):
+            self.observation_space = gym.spaces.Box(
+                low=-np.inf,
+                high=np.inf,
+                shape=self.observation_space.shape,
+                dtype=np.float32,
+            )
+        if hasattr(self, "single_observation_space") and isinstance(self.single_observation_space, gym.spaces.Box):
+            self.single_observation_space = gym.spaces.Box(
+                low=-np.inf,
+                high=np.inf,
+                shape=self.single_observation_space.shape,
+                dtype=np.float32,
+            )
 
     def step(self, action):
         obs, rews, terminateds, truncateds, infos = self.env.step(action)

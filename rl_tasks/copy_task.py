@@ -4,7 +4,7 @@ from gymnasium import spaces
 
 
 class CopyTaskEnv(gym.Env):
-    def __init__(self, seq_len=3, num_suits=3, S=3):
+    def __init__(self, seq_len=3, num_suits=2, S=3):
         super().__init__()
         assert seq_len >= 1
         assert num_suits >= 1
@@ -27,6 +27,10 @@ class CopyTaskEnv(gym.Env):
         self.t = 0
         self.u = None
         self.sequence = None
+        self.state = None
+
+    def get_episode_length(self):
+        return self.seq_len + self.S * 2
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
@@ -39,6 +43,7 @@ class CopyTaskEnv(gym.Env):
         self.sequence[self.S + self.seq_len - 1] = self.delim
 
         self.t = 0
+        self.state = self.sequence[: self.t + 1].copy()
         return int(self.sequence[self.t]), {}
 
     def step(self, action):
@@ -53,4 +58,5 @@ class CopyTaskEnv(gym.Env):
         self.t += 1
         terminated = self.t >= L
         obs = int(self.sequence[-1]) if terminated else int(self.sequence[self.t])
+        self.state = self.sequence[: self.t + 1].copy()
         return obs, reward, terminated, False, {}

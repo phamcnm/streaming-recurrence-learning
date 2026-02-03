@@ -244,7 +244,7 @@ class GatedRealLRUBPTT(nn.Module):
             hidden: hidden state
             aux_data: None for sequential, (all_predictions, all_p_halts, sampled_indices) for ACT
         """
-        if self.mode == 'sequential':
+        if self.mode in ['sequential', 'ponder_hardcoded']:
             return self.forward_sequential(x, hidden, **kwargs)
         elif self.mode == 'act':
             return self.forward_sequential_act(x, hidden, **kwargs)

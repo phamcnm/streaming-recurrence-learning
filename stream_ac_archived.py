@@ -9,12 +9,10 @@ from stream_components.optim import ObGD as Optimizer
 from stream_components.time_wrapper import AddTimeInfo
 from stream_components.normalization_wrappers import NormalizeObservation, ScaleReward
 from stream_components.sparse_init import sparse_init
-from rl_tasks.repeat_first import RepeatFirstEnv
-from rl_tasks.repeat_first_popgym import RepeatFirstPopgymEnv
-from rl_tasks.repeat_previous_popgym import RepeatPreviousPopgymEnv
+from rl_tasks.repeat_first import RepeatFirstBlankLastEnv
 from rl_tasks.copy_task import CopyTaskEnv
 from recurrent_units.mapping import LRU_MAPPING
-from recurrent_wrappers.create_models import create_model, WRAPPERS
+from recurrent_wrappers.create_models import create_model
 import matplotlib.pyplot as plt
 torch.set_num_threads(1)
 
@@ -26,56 +24,14 @@ def initialize_weights(m):
         sparse_init(m.weight, sparsity=1-sparsity_factor)
         m.bias.data.fill_(0.0)
 
-def lru_grad_norms(model: nn.Module):
-    norms = {}
-    for mod_name, mod in model.named_modules():
-        if not isinstance(mod, WRAPPERS):
-            continue
-        submods = []
-        if hasattr(mod, "ln1"):
-            submods.append(("ln1", mod.ln1))
-        submods.append(("rnn", mod.rnn))
-        if hasattr(mod, "ln2"):
-            submods.append(("ln2", mod.ln2))
-        submods.append(("mlp", mod.mlp))
-        if hasattr(mod, "ln3"):
-            submods.append(("ln3", mod.ln3))
-        for sub_name, sub in submods:
-            total = 0.0
-            has_grad = False
-            for p in sub.parameters(recurse=True):
-                if p.grad is None:
-                    continue
-                g = p.grad.detach()
-                total += g.norm(2).item() ** 2
-                has_grad = True
-            if has_grad:
-                norms[f"{mod_name}.{sub_name}"] = total ** 0.5
-    return norms
-
-def lru_seq_grad_norms(model: nn.Module):
-    norms = {}
-    for mod_name, mod in model.named_modules():
-        if not isinstance(mod, WRAPPERS):
-            continue
-        if mod._last_seq_grad is not None:
-            norms[mod_name] = mod._last_seq_grad
-    return norms
-
-def clear_lru_seq_grads(model: nn.Module):
-    for mod in model.modules():
-        if isinstance(mod, WRAPPERS):
-            mod._last_seq_grad = None
-
 class Actor(nn.Module):
-    def __init__(self, n_obs=11, n_actions=3, d_model=32, d_state=32, arch='mynet', recurrent_unit='lru', ponder_mode='sequential', ponder_eps=0.1):
+    def __init__(self, n_obs=11, n_actions=3, d_model=32, d_state=32, recurrent_unit='lru', ponder_mode='sequential', ponder_eps=0.1):
         super(Actor, self).__init__()
         self.fc_layer = nn.Linear(n_obs, d_model)
         self.recurrent_unit = recurrent_unit
         self.rnn, rnn_dim = create_model(
             name=recurrent_unit,
             embed_dim=d_model,
-            arch=arch,
             hidden_dim=d_state,
             rnn_mode=ponder_mode,
             layernorm=True
@@ -83,17 +39,17 @@ class Actor(nn.Module):
         self.fc_pi = nn.Linear(rnn_dim, n_actions)
         self.apply(initialize_weights)
 
-    def forward(self, x, hidden_state, apply_change=True, inner_loops: int = 1, **kwargs):
+    def forward(self, x, hidden_state, apply_change=True, inner_loops: int = 1):
         x = self.fc_layer(x)
         if self.recurrent_unit in LRU_MAPPING:
-            x, hidden_state, aux_data = self.rnn(x, hidden_state, inner_loops=inner_loops, **kwargs)
+            x, hidden_state, aux_data = self.rnn(x, hidden_state, inner_loops=inner_loops)
         else:
             x, hidden_state, aux_data = self.rnn(x)
         pref = self.fc_pi(x)
         return pref, hidden_state, aux_data
 
 class Critic(nn.Module):
-    def __init__(self, n_obs=11, d_model=32, d_state=32, arch='mynet', recurrent_unit='lru', ponder_mode='sequential', repeat_mode='none', ponder_eps=0.1):
+    def __init__(self, n_obs=11, d_model=32, d_state=32, recurrent_unit='lru', ponder_mode='sequential', repeat_mode='none', ponder_eps=0.1):
         super(Critic, self).__init__()
         self.fc_layer   = nn.Linear(n_obs, d_model)
         self.recurrent_unit = recurrent_unit
@@ -101,7 +57,6 @@ class Critic(nn.Module):
         self.rnn, rnn_dim = create_model(
             name=recurrent_unit,
             embed_dim=d_model,
-            arch=arch,
             hidden_dim=d_state,
             rnn_mode=ponder_mode,
             layernorm=True
@@ -112,10 +67,10 @@ class Critic(nn.Module):
         self.linear_layer  = nn.Linear(rnn_dim, 1)
         self.apply(initialize_weights)
 
-    def forward(self, x, hidden_state, apply_change=True, inner_loops: int = 1, **kwargs):
+    def forward(self, x, hidden_state, apply_change=True, inner_loops: int = 1):
         x = self.fc_layer(x)
         if self.recurrent_unit in LRU_MAPPING:
-            x, hidden_state, aux_data = self.rnn(x, hidden_state, inner_loops=inner_loops, **kwargs)
+            x, hidden_state, aux_data = self.rnn(x, hidden_state, inner_loops=inner_loops)
         else:
             x, hidden_state, aux_data = self.rnn(x)
         self.x = x.detach()
@@ -133,17 +88,13 @@ class Critic(nn.Module):
 class StreamAC(nn.Module):
     def __init__(self, n_obs=11, n_actions=3, d_model=32, d_state=32, 
                  lr=1.0, gamma=0.99, lamda=0.8, kappa_policy=3.0, kappa_value=2.0,
-                 arch='mynet', recurrent_unit='lru', ponder_mode='sequential', 
-                 repeat_mode='none', ponder_eps=0.1, ponder_n=8,
-                 grad_log_interval=0, seq_grad_log_interval=0):
+                 recurrent_unit='lru', ponder_mode='sequential', 
+                 repeat_mode='none', ponder_eps=0.1, ponder_n=8):
         super(StreamAC, self).__init__()
         self.gamma = gamma
-        self.grad_log_interval = grad_log_interval
-        self.seq_grad_log_interval = seq_grad_log_interval
-        self.update_step = 0
-        self.policy_net = Actor(n_obs=n_obs, n_actions=n_actions, d_model=d_model, d_state=d_state, arch=arch,
+        self.policy_net = Actor(n_obs=n_obs, n_actions=n_actions, d_model=d_model, d_state=d_state, 
                                 recurrent_unit=recurrent_unit, ponder_mode=ponder_mode, ponder_eps=ponder_eps)
-        self.value_net = Critic(n_obs=n_obs, d_model=d_model, d_state=d_state, arch=arch,
+        self.value_net = Critic(n_obs=n_obs, d_model=d_model, d_state=d_state, 
                                 recurrent_unit=recurrent_unit, ponder_mode=ponder_mode, repeat_mode=repeat_mode, ponder_eps=ponder_eps)
 
         self.optimizer_policy = Optimizer(self.policy_net.parameters(), lr=lr, gamma=gamma, lamda=lamda, kappa=kappa_policy)
@@ -167,27 +118,15 @@ class StreamAC(nn.Module):
         for key in self.timing_stats:
             self.timing_stats[key] = 0.0
 
-    def pi(self, x, hidden_state, apply_change=True, inner_loops: int = 1, **kwargs):
+    def pi(self, x, hidden_state, apply_change=True, inner_loops: int = 1):
         x = x.unsqueeze(0).unsqueeze(0)
-        preferences, next_hidden_state, aux_data = self.policy_net(
-            x,
-            hidden_state,
-            apply_change=apply_change,
-            inner_loops=inner_loops,
-            **kwargs,
-        )
+        preferences, next_hidden_state, aux_data = self.policy_net(x, hidden_state, apply_change=apply_change, inner_loops=inner_loops)
         probs = F.softmax(preferences, dim=-1)
         return probs, next_hidden_state, aux_data
 
-    def v(self, x, hidden_state, apply_change=True, inner_loops: int = 1, **kwargs):
+    def v(self, x, hidden_state, apply_change=True, inner_loops: int = 1):
         x = x.unsqueeze(0).unsqueeze(0)
-        v, next_hidden_state, aux_data = self.value_net(
-            x,
-            hidden_state,
-            apply_change=apply_change,
-            inner_loops=inner_loops,
-            **kwargs,
-        )
+        v, next_hidden_state, aux_data = self.value_net(x, hidden_state, apply_change=apply_change, inner_loops=inner_loops)
         return v, next_hidden_state, aux_data
 
     def sample_action(self, s, hidden_state=None, apply_change=False, inner_loops: int = 1):
@@ -202,40 +141,16 @@ class StreamAC(nn.Module):
         s, a, r, s_prime, done_mask = torch.tensor(np.array(s), dtype=torch.float), torch.tensor(np.array(a)), \
                                          torch.tensor(np.array(r)), torch.tensor(np.array(s_prime), dtype=torch.float), \
                                          torch.tensor(np.array(done_mask), dtype=torch.float)
-        track_seq_grad = (
-            self.seq_grad_log_interval > 0
-            and (self.update_step + 1) % self.seq_grad_log_interval == 0
-        )
-        if track_seq_grad:
-            clear_lru_seq_grads(self)
-        v_s, next_value_hidden, aux_data = self.v(
-            s,
-            value_hidden,
-            apply_change=True,
-            inner_loops=inner_loops+critical_step,
-            track_seq_grad=track_seq_grad,
-        )
+        v_s, next_value_hidden, aux_data = self.v(s, value_hidden, apply_change=True, inner_loops=inner_loops+critical_step)
 
         if repeat_mode == 'ds_adaptive':
             x = self.value_net.get_penultimate_output()
         
-        v_prime, _, _ = self.v(
-            s_prime,
-            next_value_hidden,
-            apply_change=False,
-            inner_loops=inner_loops,
-            track_seq_grad=track_seq_grad,
-        )
+        v_prime, _, _ = self.v(s_prime, next_value_hidden, apply_change=False, inner_loops=inner_loops)
             
         td_target = r + self.gamma * v_prime * done_mask
         delta = td_target - v_s
-        probs, next_policy_hidden, _ = self.pi(
-            s,
-            policy_hidden,
-            apply_change=True,
-            inner_loops=inner_loops+critical_step,
-            track_seq_grad=track_seq_grad,
-        )
+        probs, next_policy_hidden, _ = self.pi(s, policy_hidden, apply_change=True, inner_loops=inner_loops+critical_step)
         dist = Categorical(probs)
 
         log_prob_pi = -(dist.log_prob(a)).sum()
@@ -246,22 +161,6 @@ class StreamAC(nn.Module):
         self.optimizer_policy.zero_grad()
         value_output.backward()
         (log_prob_pi + entropy_pi).backward()
-        self.update_step += 1
-        if self.grad_log_interval > 0 and self.update_step % self.grad_log_interval == 0:
-            grad_norms = lru_grad_norms(self)
-            if grad_norms:
-                items = ", ".join(
-                    [f"{k}={v:.2e}" for k, v in sorted(grad_norms.items())]
-                )
-                print(f"\nLRU grad norms: {items}")
-        if self.seq_grad_log_interval > 0 and self.update_step % self.seq_grad_log_interval == 0:
-            seq_grad_norms = lru_seq_grad_norms(self)
-            if seq_grad_norms:
-                items = []
-                for name, g in sorted(seq_grad_norms.items()):
-                    stats = f"min={g.min():.2e},mean={g.mean():.2e},max={g.max():.2e}"
-                    items.append(f"{name}({stats})")
-                print(f"\nLRU seq grad norms: {', '.join(items)}")
         
         # old_last_repeat = last_repeat
         if repeat_mode == 'ds_adaptive':
@@ -297,13 +196,7 @@ class StreamAC(nn.Module):
     
 def create_env(env_id, seq_len=10, render=False):
     if env_id == "RepeatFirst":
-        env = RepeatFirstEnv(seq_len=seq_len)
-        episode_len = env.get_episode_length()
-    elif env_id == "RepeatFirstPopgym":
-        env = RepeatFirstPopgymEnv(seq_len=seq_len)
-        episode_len = env.get_episode_length()
-    elif env_id == "RepeatPreviousPopgym":
-        env = RepeatPreviousPopgymEnv(seq_len=seq_len)
+        env = RepeatFirstBlankLastEnv(seq_len=seq_len)
         episode_len = env.get_episode_length()
     elif env_id == "CopyTask":
         env = CopyTaskEnv(seq_len=seq_len)
@@ -315,7 +208,7 @@ def create_env(env_id, seq_len=10, render=False):
 
 def main(exp_id, exp_name, seed, env_id, seq_len, total_timesteps, total_episodes, log_interval,
         lr, gamma, lamda,  entropy_coeff, d_model, d_state, kappa_policy, kappa_value,
-        arch, recurrent_unit, ponder_mode, ponder_eps, ponder_n, inner_loops, repeat_mode, 
+        recurrent_unit, ponder_mode, ponder_eps, ponder_n, inner_loops, repeat_mode, 
         args, overshooting_info, debug=False, render=False):
     if debug:
         showfig = True
@@ -332,15 +225,14 @@ def main(exp_id, exp_name, seed, env_id, seq_len, total_timesteps, total_episode
     env, episode_len = create_env(env_id, seq_len, render)
     env = gym.wrappers.FlattenObservation(env)
     env = gym.wrappers.RecordEpisodeStatistics(env)
-    env = ScaleReward(env, gamma=gamma)
-    env = NormalizeObservation(env)
-    env = AddTimeInfo(env)
+    # env = ScaleReward(env, gamma=gamma)
+    # env = NormalizeObservation(env)
+    # env = AddTimeInfo(env)
     policy_hidden, value_hidden = None, None
     agent = StreamAC(
         n_obs=env.observation_space.shape[0], n_actions=env.action_space.n, d_model=d_model, d_state=d_state, 
         lr=lr, gamma=gamma, lamda=lamda, kappa_policy=kappa_policy, kappa_value=kappa_value, repeat_mode=repeat_mode,
-        arch=arch, recurrent_unit=recurrent_unit, ponder_mode=ponder_mode, ponder_eps=ponder_eps,
-        grad_log_interval=args.grad_log_interval, seq_grad_log_interval=args.seq_grad_log_interval)
+        recurrent_unit=recurrent_unit, ponder_mode=ponder_mode, ponder_eps=ponder_eps)
     num_params = sum(p.numel() for p in agent.parameters() if p.requires_grad)
     print("Number of parameters:", num_params)
 
@@ -356,8 +248,6 @@ def main(exp_id, exp_name, seed, env_id, seq_len, total_timesteps, total_episode
 
     episode_count, step_count, last_step_count = 0, 0, 0
     episode_rewards = []
-    episode_trajectory = []
-    rollout_log_interval = 500
     start_time = time.time()
     last_log_time = start_time
     
@@ -380,15 +270,6 @@ def main(exp_id, exp_name, seed, env_id, seq_len, total_timesteps, total_episode
         
         # step
         s_prime, r, terminated, truncated, info = env.step(a)
-        if not terminated and not truncated:
-            episode_trajectory.append(
-                {
-                    "s_prime": np.array(env.unwrapped.state).tolist(),
-                    "a": int(a),
-                    "r": round(float(r),3),
-                    "done": bool(terminated or truncated),
-                }
-            )
 
         # training
         policy_hidden = initial_policy_hidden
@@ -417,21 +298,6 @@ def main(exp_id, exp_name, seed, env_id, seq_len, total_timesteps, total_episode
             total_return = info['episode']['r']
             episode_rewards.append(total_return)
             episode_count += 1
-
-            episode_trajectory.append(
-                {
-                    "s_prime": np.array(env.unwrapped.state).tolist(),
-                    "a": int(a),
-                    "total return": info['episode']['r'],
-                    "done": True,
-                }
-            )
-
-            if rollout_log_interval > 0 and episode_count % rollout_log_interval == 0:
-                print(f"\nEpisode {episode_count} rollout (return {total_return:.2f}):")
-                for t, transition in enumerate(episode_trajectory):
-                    print(f"  t={t}: {transition}")
-                print()
             
             if episode_count % log_interval == 0: # logging
                 elapsed_time = time.time() - last_log_time
@@ -470,15 +336,6 @@ def main(exp_id, exp_name, seed, env_id, seq_len, total_timesteps, total_episode
             critical_step = 3
             terminated, truncated = False, False
             policy_hidden, value_hidden = None, None
-            episode_trajectory = []
-            episode_trajectory.append(
-                {
-                    "s0": np.array(env.unwrapped.state).tolist(),
-                    "a": None,
-                    "r": None,
-                    "done": None,
-                }
-            )
 
     env.close()
 
@@ -541,8 +398,8 @@ if __name__ == '__main__':
     parser.add_argument('--exp_id', type=int, default=0)
     parser.add_argument('--exp_name', type=str, default='')
     parser.add_argument('--seed', type=int, default=0)
-    parser.add_argument('--env_id', type=str, default='RepeatFirst')
-    parser.add_argument('--seq_len', type=int, default=10, help='Length of seq_len parameter for environment')
+    parser.add_argument('--env_id', type=str, default='CopyTask')
+    parser.add_argument('--seq_len', type=int, default=5, help='Length of seq_len parameter for environment')
     parser.add_argument('--total_timesteps', type=int, default=2000000, help='Total timesteps to run, only used if total episodes is None/0')
     parser.add_argument('--total_episodes', type=int, default=10000, help='Total number of episodes to run')
     parser.add_argument('--log_interval', type=int, default=100, help='Log performance every n episodes')
@@ -557,8 +414,7 @@ if __name__ == '__main__':
     parser.add_argument('--kappa_policy', type=float, default=3.0)
     parser.add_argument('--kappa_value', type=float, default=2.0)
 
-    # neural arch args
-    parser.add_argument('--arch', type=str, default='mynet')
+    # rnn args
     parser.add_argument('--rnn_type', type=str, default='glru')
     parser.add_argument('--ponder_mode', type=str, default='sequential', choices=["sequential", "convergence", "act", "ponder_hardcoded"])
     parser.add_argument('--ponder_eps', type=float, default=0.5) # threshold to halt pondering
@@ -567,8 +423,6 @@ if __name__ == '__main__':
     parser.add_argument('--repeat_mode', type=str, default='none', choices=['none', 'ds_adaptive', 'ds_fixed', 'ds_hardcoded']) # ds for deep_supervision
 
     # operational args
-    parser.add_argument('--grad_log_interval', type=int, default=0, help='Log LRU grad norms every N updates (0 disables)')
-    parser.add_argument('--seq_grad_log_interval', type=int, default=0, help='Log per-timestep grad norms every N updates (0 disables)')
     parser.add_argument('--overshooting_info', action='store_true')
     parser.add_argument('--debug', action='store_true')
     parser.add_argument('--render', action='store_true')
@@ -577,5 +431,5 @@ if __name__ == '__main__':
 
     main(args.exp_id, args.exp_name, args.seed, args.env_id, args.seq_len, args.total_timesteps, args.total_episodes, args.log_interval,
          args.lr, args.gamma, args.lamda, args.entropy_coeff, args.d_model, args.d_state, args.kappa_policy, args.kappa_value, 
-         args.arch, args.rnn_type, args.ponder_mode, args.ponder_eps, args.ponder_n, args.inner_loops, args.repeat_mode,
+         args.rnn_type, args.ponder_mode, args.ponder_eps, args.ponder_n, args.inner_loops, args.repeat_mode,
          args, args.overshooting_info, args.debug, args.render)
