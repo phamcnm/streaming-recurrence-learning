@@ -444,7 +444,7 @@ if __name__ == "__main__":
     episode_count = 0
     episode_trajectory = []
     env0_episode_count = 0
-    rollout_log_interval = 500
+    rollout_log_interval = 1000
 
     timing_stats = {
         'forward': 0.0,
@@ -577,17 +577,19 @@ if __name__ == "__main__":
                 iter_rnn_dormancy = rnn_dormant.detach().cpu()
                 iter_mlp_dormancy = mlp_dormant.item()
                 rnn_items = ", ".join([f"{v:.3f}" for v in rnn_dormant.tolist()])
-                print(
-                    f"Dormancy (actor) rnn: [{rnn_items}], "
-                    f"mlp: {mlp_dormant:.3f}"
-                )
+                if iteration % 20 == 0:
+                    print(
+                        f"Dormancy (actor) rnn: [{rnn_items}], "
+                        f"mlp: {mlp_dormant:.3f}"
+                    )
             if critic_stats is not None:
                 rnn_dormant, mlp_dormant = critic_stats
                 rnn_items = ", ".join([f"{v:.3f}" for v in rnn_dormant.tolist()])
-                print(
-                    f"Dormancy (critic) rnn: [{rnn_items}], "
-                    f"mlp: {mlp_dormant:.3f}"
-                )
+                if iteration % 20 == 0:
+                    print(
+                        f"Dormancy (critic) rnn: [{rnn_items}], "
+                        f"mlp: {mlp_dormant:.3f}"
+                    )
 
         # compute advantage
         agent.eval()
@@ -715,7 +717,8 @@ if __name__ == "__main__":
                         items = ", ".join(
                             [f"{k}={v:.2e}" for k, v in sorted(grad_norms.items())]
                         )
-                        print(f"LRU grad norms: {items}")
+                        if iteration % 20 == 0:
+                            print(f"LRU grad norms: {items}")
                 log_seq_grad_norms = (
                     is_midpoint
                     if args.auto_track
@@ -736,7 +739,8 @@ if __name__ == "__main__":
                         for name, g in sorted(seq_grad_norms.items()):
                             stats = f"min={g.min():.2e},mean={g.mean():.2e},max={g.max():.2e}"
                             items.append(f"{name}({stats})")
-                        print(f"LRU seq grad norms: {', '.join(items)}")
+                        if iteration % 20 == 0:
+                            print(f"LRU seq grad norms: {', '.join(items)}")
                 nn.utils.clip_grad_norm_(agent.parameters(), args.max_grad_norm)
                 optimizer.step()
                 timing_stats['backward_and_step'] += time.time() - t0
@@ -758,7 +762,8 @@ if __name__ == "__main__":
         tracking_history["seq_grad_norms"].append(iter_seq_grad_norms)
 
         # if iteration % 20 == 0:
-        print(f"{iteration}/{args.num_iterations} (Episode {episode_count}, Step {global_step}): SPS={int(sps)}, avg_return={avg_reward:.2f}\n")
+        if iteration % 20 == 0:
+            print(f"{iteration}/{args.num_iterations} (Episode {episode_count}, Step {global_step}): SPS={int(sps)}, avg_return={avg_reward:.2f}\n")
         # timing_breakdown = ", ".join([f"{k}={v/elapsed_time*100:.1f}%" for k, v in timing_stats.items()])
         # print(f"Timing breakdown: {timing_breakdown}")
         
