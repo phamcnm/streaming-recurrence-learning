@@ -13,7 +13,7 @@ import torch.nn.functional as F
 import torch.optim as optim
 import tyro
 from torch.distributions.categorical import Categorical
-from rl_tasks.repeat_first import RepeatFirstEnv
+from rl_tasks.repeat_first import RepeatFirstEnv, RepeatFirstPenEnv
 from rl_tasks.repeat_first_popgym import RepeatFirstPopgymEnv
 from rl_tasks.repeat_previous_popgym import RepeatPreviousPopgymEnv
 from rl_tasks.copy_task import CopyTaskEnv
@@ -121,6 +121,9 @@ class Args:
 def create_env(env_id, seq_len=10):
     if env_id == "RepeatFirst":
         env = RepeatFirstEnv(seq_len=seq_len)
+        episode_len = env.get_episode_length()
+    elif env_id == "RepeatFirstPen":
+        env = RepeatFirstPenEnv(seq_len=seq_len)
         episode_len = env.get_episode_length()
     elif env_id == "RepeatFirstPopgym":
         env = RepeatFirstPopgymEnv(seq_len=seq_len)

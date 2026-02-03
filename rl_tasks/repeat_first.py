@@ -2,7 +2,7 @@ import numpy as np
 import gymnasium as gym
 from gymnasium import spaces
 
-class RepeatFirstEnv(gym.Env):
+class RepeatFirstBaseEnv(gym.Env):
     def __init__(self, seq_len=10, num_suits=3, penalize=False, rng_obs=True):
         super().__init__()
         assert seq_len >= 1
@@ -27,6 +27,12 @@ class RepeatFirstEnv(gym.Env):
         self.t = 0
         self.target = 0
         self.state = None
+
+    @classmethod
+    def create(cls, *, penalize=False, **kwargs):
+        if penalize:
+            return RepeatFirstPenEnv(**kwargs)
+        return RepeatFirstEnv(**kwargs)
 
     def get_episode_length(self):
         return self.seq_len
@@ -66,3 +72,23 @@ class RepeatFirstEnv(gym.Env):
         self.t += 1
         self.state = (0, 0, 1)
         return self.state, reward, True, False, {}
+
+
+class RepeatFirstEnv(RepeatFirstBaseEnv):
+    def __init__(self, seq_len=10, num_suits=3, penalize=False, rng_obs=True):
+        super().__init__(
+            seq_len=seq_len,
+            num_suits=num_suits,
+            penalize=penalize,
+            rng_obs=rng_obs,
+        )
+
+
+class RepeatFirstPenEnv(RepeatFirstBaseEnv):
+    def __init__(self, seq_len=10, num_suits=3, penalize=True, rng_obs=True):
+        super().__init__(
+            seq_len=seq_len,
+            num_suits=num_suits,
+            penalize=penalize,
+            rng_obs=rng_obs,
+        )
