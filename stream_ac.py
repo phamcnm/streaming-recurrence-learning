@@ -9,7 +9,7 @@ from stream_components.optim import ObGD as Optimizer
 from stream_components.time_wrapper import AddTimeInfo
 from stream_components.normalization_wrappers import NormalizeObservation, ScaleReward
 from stream_components.sparse_init import sparse_init
-from rl_tasks.repeat_first import RepeatFirstEnv
+from rl_tasks.repeat_first import RepeatFirstEnv, RepeatFirstPenEnv
 from rl_tasks.repeat_first_popgym import RepeatFirstPopgymEnv
 from rl_tasks.repeat_previous_popgym import RepeatPreviousPopgymEnv
 from rl_tasks.copy_task import CopyTaskEnv
@@ -298,6 +298,9 @@ class StreamAC(nn.Module):
 def create_env(env_id, seq_len=10, render=False):
     if env_id == "RepeatFirst":
         env = RepeatFirstEnv(seq_len=seq_len)
+        episode_len = env.get_episode_length()
+    elif env_id == "RepeatFirstPen":
+        env = RepeatFirstPenEnv(seq_len=seq_len)
         episode_len = env.get_episode_length()
     elif env_id == "RepeatFirstPopgym":
         env = RepeatFirstPopgymEnv(seq_len=seq_len)
