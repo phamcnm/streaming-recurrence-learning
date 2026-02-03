@@ -315,8 +315,8 @@ def create_env(env_id, seq_len=10, render=False):
 
 def main(exp_id, exp_name, seed, env_id, seq_len, total_timesteps, total_episodes, log_interval,
         lr, gamma, lamda,  entropy_coeff, d_model, d_state, kappa_policy, kappa_value,
-        arch, recurrent_unit, ponder_mode, ponder_eps, ponder_n, inner_loops, repeat_mode, 
-        args, overshooting_info, debug=False, render=False):
+        arch, recurrent_unit, ponder_mode, ponder_eps, ponder_n, inner_loops, repeat_mode,
+        params_to_track, args, overshooting_info, debug=False, render=False):
     if debug:
         showfig = True
         if showfig:
@@ -515,19 +515,16 @@ def main(exp_id, exp_name, seed, env_id, seq_len, total_timesteps, total_episode
         except FileExistsError:
             pass
 
-    run_dir = os.path.join(run_dir, f"ponder__{ponder_mode}")
-    if not os.path.exists(run_dir):
-        try:
-            os.makedirs(run_dir)
-        except FileExistsError:
-            pass
-
-    run_dir = os.path.join(run_dir, f"repeat__{repeat_mode}")
-    if not os.path.exists(run_dir):
-        try:
-            os.makedirs(run_dir)
-        except FileExistsError:
-            pass
+    for param in params_to_track:
+        if not hasattr(args, param):
+            print(f"{param} not in args")
+            continue
+        run_dir = os.path.join(run_dir, f"{param}__{getattr(args, param)}")
+        if not os.path.exists(run_dir):
+            try:
+                os.makedirs(run_dir)
+            except FileExistsError:
+                pass
 
     with open(os.path.join(run_dir, f"seed_{seed}.pkl"), "wb") as f:
         pickle.dump((iteration_returns, iteration_timesteps, critic_accuracy), f)
@@ -565,6 +562,7 @@ if __name__ == '__main__':
     parser.add_argument('--ponder_n', type=int, default=4) # max ponder steps, 
     parser.add_argument('--inner_loops', type=int, default=1, help='Number of inner recurrent updates per step')
     parser.add_argument('--repeat_mode', type=str, default='none', choices=['none', 'ds_adaptive', 'ds_fixed', 'ds_hardcoded']) # ds for deep_supervision
+    parser.add_argument('--params_to_track', type=str, nargs='*', default=['ponder_mode', 'repeat_mode'])
 
     # operational args
     parser.add_argument('--grad_log_interval', type=int, default=0, help='Log LRU grad norms every N updates (0 disables)')
@@ -577,5 +575,5 @@ if __name__ == '__main__':
 
     main(args.exp_id, args.exp_name, args.seed, args.env_id, args.seq_len, args.total_timesteps, args.total_episodes, args.log_interval,
          args.lr, args.gamma, args.lamda, args.entropy_coeff, args.d_model, args.d_state, args.kappa_policy, args.kappa_value, 
-         args.arch, args.rnn_type, args.ponder_mode, args.ponder_eps, args.ponder_n, args.inner_loops, args.repeat_mode,
+         args.arch, args.rnn_type, args.ponder_mode, args.ponder_eps, args.ponder_n, args.inner_loops, args.repeat_mode, args.params_to_track,
          args, args.overshooting_info, args.debug, args.render)
