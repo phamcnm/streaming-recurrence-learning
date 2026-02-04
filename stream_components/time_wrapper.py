@@ -2,15 +2,21 @@ import numpy as np
 import gymnasium as gym
 
 class AddTimeInfo(gym.core.Wrapper):
-    def __init__(self, env: gym.Env):
+    def __init__(self, env: gym.Env, time_limit):
         super().__init__(env)
-        # if self.env.num_envs > 1:
-        #     raise ValueError("AddTimeInfo only supports single environments")
+        if self.env.num_envs > 1:
+            raise ValueError("AddTimeInfo only supports single environments")
         self.epi_time = -0.5
-        # if 'dm_control' in env.spec.id:
-        self.time_limit = 1000
-        # else:
-        # self.time_limit = env.spec.max_episode_steps
+        if time_limit is None:
+            if hasattr(env, 'spec'):
+                if hasattr(env.spec, 'id') and 'dm_control' in env.spec.id:
+                    self.time_limit = 1000
+                else:
+                    self.time_limit = env.spec.max_episode_steps
+            else:
+                time_limit = 1000
+        else:
+            self.time_limit = time_limit
         self.obs_space_size = self.observation_space.shape[0] + self.env.num_envs
         self.observation_space = gym.spaces.Box(low=-np.inf, high=np.inf, shape=(self.obs_space_size,), dtype=np.float32)
         if not (isinstance(self.action_space, gym.spaces.Box) or isinstance(self.action_space, gym.spaces.Discrete)):

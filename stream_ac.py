@@ -16,6 +16,8 @@ from rl_tasks.copy_task import CopyTaskEnv
 from recurrent_units.mapping import LRU_MAPPING
 from recurrent_wrappers.create_models import create_model, WRAPPERS
 import matplotlib.pyplot as plt
+
+from aux_wrappers.previous_action_wrapper import PreviousAction
 torch.set_num_threads(1)
 
 def initialize_weights(m):
@@ -351,7 +353,8 @@ def main(exp_id, exp_name, seed, env_id, seq_len, total_timesteps, total_episode
     env = gym.wrappers.RecordEpisodeStatistics(env)
     env = ScaleReward(env, gamma=gamma)
     env = NormalizeObservation(env)
-    env = AddTimeInfo(env)
+    env = PreviousAction(env, mode="concat")
+    env = AddTimeInfo(env, time_limit=episode_len)
     policy_hidden, value_hidden = None, None
     agent = StreamAC(
         n_obs=env.observation_space.shape[0], n_actions=env.action_space.n, d_model=d_model, d_state=d_state, 
