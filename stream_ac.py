@@ -92,6 +92,11 @@ class Actor(nn.Module):
         pref = self.fc_pi(x)
         return pref, hidden_state, aux_data
 
+    def reset_rtrl_states(self):
+        inner_rnn = getattr(self, 'rnn', None)
+        if inner_rnn and hasattr(inner_rnn, 'reset_rtrl_states'):
+            inner_rnn.reset_rtrl_states()
+
 class Critic(nn.Module):
     def __init__(self, n_obs=11, d_model=32, d_state=32, arch='mynet', recurrent_unit='lru', ponder_mode='sequential', repeat_mode='none', ponder_eps=0.1):
         super(Critic, self).__init__()
@@ -121,6 +126,11 @@ class Critic(nn.Module):
         self.x = x.detach()
         val = self.linear_layer(x)
         return val, hidden_state, aux_data
+    
+    def reset_rtrl_states(self):
+        inner_rnn = getattr(self, 'rnn', None)
+        if inner_rnn and hasattr(inner_rnn, 'reset_rtrl_states'):
+            inner_rnn.reset_rtrl_states()
     
     def get_penultimate_output(self):
         return self.x
@@ -159,6 +169,10 @@ class StreamAC(nn.Module):
             'loss_computation': 0.0,
             'backward_and_step': 0.0,
         }
+
+    def reset_rtrl_states(self):
+        self.policy_net.reset_rtrl_states()
+        self.value_net.reset_rtrl_states()
 
     def reset_local_counters(self):
         self.overshooting_local_counter = 0
@@ -470,6 +484,7 @@ def main(exp_id, exp_name, seed, env_id, seq_len, total_timesteps, total_episode
                     break
 
             s, _ = env.reset()
+            agent.reset_rtrl_states()
             critical_step = 3
             terminated, truncated = False, False
             policy_hidden, value_hidden = None, None
@@ -558,8 +573,8 @@ if __name__ == '__main__':
     parser.add_argument('--kappa_value', type=float, default=2.0)
 
     # neural arch args
-    parser.add_argument('--arch', type=str, default='mynet')
-    parser.add_argument('--rnn_type', type=str, default='glru')
+    parser.add_argument('--arch', type=str, default='bestnet')
+    parser.add_argument('--rnn_type', type=str, default='lru_rtrl')
     parser.add_argument('--ponder_mode', type=str, default='sequential', choices=["sequential", "convergence", "act", "ponder_hardcoded"])
     parser.add_argument('--ponder_eps', type=float, default=0.5) # threshold to halt pondering
     parser.add_argument('--ponder_n', type=int, default=4) # max ponder steps, 
