@@ -22,6 +22,7 @@ from recurrent_wrappers.create_models import create_model, WRAPPERS
 torch.set_num_threads(1)
 
 from stream_components.normalization_wrappers import NormalizeObservation, ScaleReward
+from aux_wrappers.previous_action_wrapper import PreviousAction
 
 @dataclass
 class Args:
@@ -42,7 +43,7 @@ class Args:
     params_to_track: List[str] = field(default_factory=list)
 
     # Algorithm specific arguments
-    env_id: str = "RepeatPreviousPopgym"
+    env_id: str = "RepeatFirst"
     """the id of the environment"""
     corridor_length: int = 10
     """corridor length for TMaze"""
@@ -144,6 +145,7 @@ def wrap_env(env):
     env = gym.wrappers.RecordEpisodeStatistics(env)
     env = ScaleReward(env, gamma=0.99)
     env = NormalizeObservation(env)
+    env = PreviousAction(env, mode="concat")
     return env
 
 def make_env(env_id, seq_len=10):
@@ -306,7 +308,7 @@ class Agent(nn.Module):
         self.critic_readout = layer_init(nn.Linear(self.outdim, 1), std=0.01)
         self.critic.apply(init_weights)
         
-    def get_states(self, x, rnn_state, done, network='actor', rnn_burnin=0.0, **kwargs):
+    def get_states(self, x, rnn_state, done, network='actor', rnn_burnin=0.0, batch_size=1, **kwargs):
         if network == 'actor':
             embedder = self.actor_embedder
             rnn = self.actor
@@ -318,32 +320,33 @@ class Agent(nn.Module):
             x = F.relu(x)
         if self.rnn_type == 'mlp':
             return rnn(x)
-        batch_size = rnn_state.shape[0]
         seq_len = x.shape[0] // batch_size
         x = x.reshape((seq_len, batch_size, -1))
         done_reshaped = done.reshape((seq_len, batch_size))
-        x, rnn_state, aux_data = rnn(x, rnn_state, done=done_reshaped, **kwargs)
+        x, rnn_state, aux_data = rnn(x, hidden=rnn_state, done=done_reshaped, **kwargs)
         x = x.reshape(-1, self.outdim)
         return x, rnn_state, aux_data
 
-    def get_value(self, x, rnn_state, done, rnn_burnin=0.0, **kwargs):
+    def get_value(self, x, rnn_state, done, rnn_burnin=0.0, batch_size=1, **kwargs):
         x, critic_rnn_state, _ = self.get_states(
             x,
             rnn_state,
             done,
             network='critic',
             rnn_burnin=rnn_burnin,
+            batch_size=batch_size,
             **kwargs,
         )
         return self.critic_readout(x), critic_rnn_state
 
-    def get_action(self, x, rnn_state, done, action=None, rnn_burnin=0.0, **kwargs):
+    def get_action(self, x, rnn_state, done, action=None, rnn_burnin=0.0, batch_size=1, **kwargs):
         x, rnn_state, aux_data = self.get_states(
             x,
             rnn_state,
             done,
             network='actor',
             rnn_burnin=rnn_burnin,
+            batch_size=batch_size,
             **kwargs,
         )
         logits = self.actor_readout(x)
@@ -491,15 +494,29 @@ if __name__ == "__main__":
             dones[step] = next_done
             if args.rnn_init == 'stored' and step % seqlength == 0:
                 # storing rnn states if needed
-                initial_actor_rnn_state[:, step // seqlength, :] = actor_rnn_state_env_lv
-                initial_critic_rnn_state[:, step // seqlength, :] = critic_rnn_state_env_lv
+                if actor_rnn_state_env_lv is not None:
+                    initial_actor_rnn_state[:, step // seqlength, :] = actor_rnn_state_env_lv
+                if critic_rnn_state_env_lv is not None:
+                    initial_critic_rnn_state[:, step // seqlength, :] = critic_rnn_state_env_lv
 
             # ALGO LOGIC: action logic
             agent.eval()
             t0 = time.time()
             with torch.no_grad():
-                action, logprob, _, actor_rnn_state_env_lv, aux_data_rollout = agent.get_action(obs_curr, actor_rnn_state_env_lv, next_done, rnn_burnin=0.0)
-                value, critic_rnn_state_env_lv = agent.get_value(obs_curr, critic_rnn_state_env_lv, next_done, rnn_burnin=0.0)
+                action, logprob, _, actor_rnn_state_env_lv, aux_data_rollout = agent.get_action(
+                    obs_curr,
+                    actor_rnn_state_env_lv,
+                    next_done,
+                    rnn_burnin=0.0,
+                    batch_size=args.num_envs,
+                )
+                value, critic_rnn_state_env_lv = agent.get_value(
+                    obs_curr,
+                    critic_rnn_state_env_lv,
+                    next_done,
+                    rnn_burnin=0.0,
+                    batch_size=args.num_envs,
+                )
                 values[step] = value.flatten()
             timing_stats['forward'] += time.time() - t0
             agent.train()
@@ -597,7 +614,13 @@ if __name__ == "__main__":
         # compute advantage
         agent.eval()
         with torch.no_grad():
-            next_value, _= agent.get_value(next_obs[-1], critic_rnn_state_env_lv, next_done, rnn_burnin=0.0)
+            next_value, _= agent.get_value(
+                next_obs[-1],
+                critic_rnn_state_env_lv,
+                next_done,
+                rnn_burnin=0.0,
+                batch_size=args.num_envs,
+            )
             next_value = next_value.reshape(1, -1)
             advantages = torch.zeros_like(rewards).to(device)
             lastgaelam = 0
@@ -662,6 +685,7 @@ if __name__ == "__main__":
                     b_dones[mb_inds],
                     b_actions[mb_inds],
                     rnn_burnin=args.rnn_burnin,
+                    batch_size=seqsperminibatch,
                     track_seq_grad=track_seq_grad,
                 )
                 newvalue, _ = agent.get_value(
@@ -669,6 +693,7 @@ if __name__ == "__main__":
                     mb_critic_rnn_state,
                     b_dones[mb_inds],
                     rnn_burnin=args.rnn_burnin,
+                    batch_size=seqsperminibatch,
                     track_seq_grad=track_seq_grad,
                 )
                 timing_stats['forward'] += time.time() - t0
