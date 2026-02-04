@@ -48,7 +48,7 @@ class SimbaWrapper(nn.Module):
             x.retain_grad()
             x.register_hook(self._save_seq_grad)
 
-        x, new_hidden, aux = self.rnn.forward(x, hidden, done=done, **kwargs)
+        x, new_hidden, aux = self.rnn.forward(x, hidden=hidden, done=done, **kwargs)
         if isinstance(aux, tuple):
             summary = [round(a.float().mean().item(), 1) for a in aux[2]]
             if len(aux) > 3:
