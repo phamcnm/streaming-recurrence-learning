@@ -167,6 +167,16 @@ def wrap_env(env, env_type):
         env = gym.wrappers.ResizeObservation(env, (84, 84))
         env = gym.wrappers.GrayscaleObservation(env)
         env = gym.wrappers.FrameStackObservation(env, 4)
+    elif env_type == 'mujoco':
+        env = gym.wrappers.FlattenObservation(env)  # deal with dm_control's Dict observation space
+        env = gym.wrappers.RecordEpisodeStatistics(env)
+        env = gym.wrappers.ClipAction(env)
+        env = gym.wrappers.NormalizeObservation(env)
+        env = gym.wrappers.TransformObservation(env, lambda obs: np.clip(obs, -10, 10),
+            gym.spaces.Box(-10, 10, shape=env.observation_space.shape, dtype=env.observation_space.dtype)
+        )
+        env = gym.wrappers.NormalizeReward(env, gamma=0.99)
+        env = gym.wrappers.TransformReward(env, lambda reward: np.clip(reward, -10, 10))
     else:
         env = gym.wrappers.FlattenObservation(env)
         env = gym.wrappers.RecordEpisodeStatistics(env)
