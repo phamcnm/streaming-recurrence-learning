@@ -6,23 +6,33 @@ from dataclasses import dataclass, field, asdict
 from typing import List
 
 import gymnasium as gym
+import ale_py
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 import tyro
-from torch.distributions.categorical import Categorical
 from rl_tasks.repeat_first import RepeatFirstEnv, RepeatFirstPenEnv
 from rl_tasks.repeat_first_popgym import RepeatFirstPopgymEnv
 from rl_tasks.repeat_previous_popgym import RepeatPreviousPopgymEnv
 from rl_tasks.copy_task import CopyTaskEnv
 from recurrent_units.mapping import LRU_MAPPING
-from recurrent_wrappers.create_models import create_model, WRAPPERS
+from recurrent_wrappers.create_models import WRAPPERS
+from ppo_discrete_agents import create_agent
+from utils import get_env_type
 torch.set_num_threads(1)
 
 from stream_components.normalization_wrappers import NormalizeObservation, ScaleReward
 from aux_wrappers.previous_action_wrapper import PreviousAction
+from aux_wrappers.atari_wrappers import (  # isort:skip
+    ClipRewardEnv,
+    EpisodicLifeEnv,
+    FireResetEnv,
+    MaxAndSkipEnv,
+    NoopResetEnv,
+)
+gym.register_envs(ale_py)
 
 @dataclass
 class Args:
@@ -40,10 +50,9 @@ class Args:
     """if toggled, cuda will be enabled by default"""
     save_model: bool = False
     """whether to save model into the `runs/{run_name}` folder"""
-    params_to_track: List[str] = field(default_factory=list)
 
     # Algorithm specific arguments
-    env_id: str = "RepeatFirst"
+    env_id: str = "Acrobot-v1"
     """the id of the environment"""
     corridor_length: int = 10
     """corridor length for TMaze"""
@@ -79,21 +88,27 @@ class Args:
     """coefficient of the entropy"""
     vf_coef: float = 0.5
     """coefficient of the value function"""
+
+    # bookeeping
+    params_to_track: List[str] = field(default_factory=list)
+    """params to track into folder tree to be compatible with plotting code"""
     max_grad_norm: float = 0.5
     """the maximum norm for the gradient clipping"""
-    grad_log_interval: int = 1000
+    grad_log_interval: int = 0
     """log LRU grad norms every N optimization steps (0 disables)"""
     seq_grad_log_interval: int = 0
     """log per-timestep grad norms through LRU input every N optimization steps (0 disables)"""
-    dormancy_log_interval: int = 25
+    dormancy_log_interval: int = 0
     """log dormant neuron stats every N iterations (0 disables)"""
     dormancy_threshold: float = 0.025
     """normalized activity threshold for dormant neurons"""
     auto_track: bool = False
     """track dormancy and grad stats every iteration at a fixed point in the update"""
+    use_default_hyperparams: bool = False
+    """set hyperparameters to preset values, mostly to reproduce baselines' performance"""
 
     # architecture
-    arch: str = "mynet"
+    arch: str = "bestnet"
     """deep neural architecture"""
     rnn_type: str = "glru"
     """memory type of the agent"""
@@ -140,18 +155,30 @@ def create_env(env_id, seq_len=10):
         episode_len = None
     return env, episode_len
 
-def wrap_env(env):
-    env = gym.wrappers.FlattenObservation(env)
-    env = gym.wrappers.RecordEpisodeStatistics(env)
-    env = ScaleReward(env, gamma=0.99)
-    env = NormalizeObservation(env)
-    env = PreviousAction(env, mode="concat")
+def wrap_env(env, env_type):
+    if env_type == 'ale_py':
+        env = gym.wrappers.RecordEpisodeStatistics(env)
+        env = NoopResetEnv(env, noop_max=30)
+        env = MaxAndSkipEnv(env, skip=4)
+        env = EpisodicLifeEnv(env)
+        if "FIRE" in env.unwrapped.get_action_meanings():
+            env = FireResetEnv(env)
+        env = ClipRewardEnv(env)
+        env = gym.wrappers.ResizeObservation(env, (84, 84))
+        env = gym.wrappers.GrayscaleObservation(env)
+        env = gym.wrappers.FrameStackObservation(env, 4)
+    else:
+        env = gym.wrappers.FlattenObservation(env)
+        env = gym.wrappers.RecordEpisodeStatistics(env)
+        env = ScaleReward(env, gamma=0.99)
+        env = NormalizeObservation(env)
+        env = PreviousAction(env, mode="concat")
     return env
 
-def make_env(env_id, seq_len=10):
+def make_env(env_id, seq_len=10, env_type='custom'):
     def thunk():
         env, _ = create_env(env_id, seq_len=seq_len)
-        env = wrap_env(env)
+        env = wrap_env(env, env_type)
         return env
     return thunk
 
@@ -173,23 +200,6 @@ def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
     torch.nn.init.orthogonal_(layer.weight, std)
     torch.nn.init.constant_(layer.bias, bias_const)
     return layer
-
-def init_weights(m, std=1.0, bias_const=0.0):
-    if isinstance(m, nn.LayerNorm):
-        if m.weight is not None: nn.init.constant_(m.weight, 1.0)
-        if m.bias   is not None: nn.init.constant_(m.bias,   0.0)
-        return
-    if isinstance(m, nn.Linear):
-        nn.init.orthogonal_(m.weight, std)
-        if m.bias is not None:
-            nn.init.constant_(m.bias, bias_const)
-        return
-    for _, p in m.named_parameters(recurse=False):
-        if p is None: continue
-        if p.ndim < 2:
-            nn.init.constant_(p, bias_const)
-        else:
-            nn.init.orthogonal_(p, std)
 
 def lru_grad_norms(agent: nn.Module):
     norms = {}
@@ -280,81 +290,6 @@ def _compute_dormancy_stats(
 
     return rnn_dormant, mlp_dormant_mean
 
-class Agent(nn.Module):
-    def __init__(self, n_obs, n_actions, rnn_unit="glru", arch='mynet', d_model=64, d_state=64, rnn_mode="sequential", ponder_eps=0.01):
-        super().__init__()
-        self.rnn_type = rnn_unit
-        self.rnn_mode = rnn_mode
-
-        self.actor_embedder = layer_init(nn.Linear(n_obs, d_model), std=1)
-        self.actor, self.outdim = create_model(
-            name=rnn_unit,
-            embed_dim=d_model,
-            hidden_dim=d_state,
-            arch=arch,
-            rnn_mode=rnn_mode,
-            layernorm=True)
-        self.actor_readout = layer_init(nn.Linear(self.outdim, n_actions), std=0.01)
-        self.actor.apply(init_weights)
-
-        self.critic_embedder = layer_init(nn.Linear(n_obs, d_model), std=1)
-        self.critic, self.outdim = create_model(
-            name=rnn_unit,
-            embed_dim=d_model,
-            hidden_dim=d_state,
-            arch=arch,
-            rnn_mode=rnn_mode,
-            layernorm=True)
-        self.critic_readout = layer_init(nn.Linear(self.outdim, 1), std=0.01)
-        self.critic.apply(init_weights)
-        
-    def get_states(self, x, rnn_state, done, network='actor', rnn_burnin=0.0, batch_size=1, **kwargs):
-        if network == 'actor':
-            embedder = self.actor_embedder
-            rnn = self.actor
-        elif network == 'critic':
-            embedder = self.critic_embedder
-            rnn = self.critic
-        x = embedder(x)
-        if self.rnn_type in ["gru", "rnn"]:
-            x = F.relu(x)
-        if self.rnn_type == 'mlp':
-            return rnn(x)
-        seq_len = x.shape[0] // batch_size
-        x = x.reshape((seq_len, batch_size, -1))
-        done_reshaped = done.reshape((seq_len, batch_size))
-        x, rnn_state, aux_data = rnn(x, hidden=rnn_state, done=done_reshaped, **kwargs)
-        x = x.reshape(-1, self.outdim)
-        return x, rnn_state, aux_data
-
-    def get_value(self, x, rnn_state, done, rnn_burnin=0.0, batch_size=1, **kwargs):
-        x, critic_rnn_state, _ = self.get_states(
-            x,
-            rnn_state,
-            done,
-            network='critic',
-            rnn_burnin=rnn_burnin,
-            batch_size=batch_size,
-            **kwargs,
-        )
-        return self.critic_readout(x), critic_rnn_state
-
-    def get_action(self, x, rnn_state, done, action=None, rnn_burnin=0.0, batch_size=1, **kwargs):
-        x, rnn_state, aux_data = self.get_states(
-            x,
-            rnn_state,
-            done,
-            network='actor',
-            rnn_burnin=rnn_burnin,
-            batch_size=batch_size,
-            **kwargs,
-        )
-        logits = self.actor_readout(x)
-        probs = Categorical(logits=logits)
-        if action is None:
-            action = probs.sample()
-        # don't return critic value here. Instead, needs to call get_value because we need to unroll critic rnn
-        return action, probs.log_prob(action), probs.entropy(), rnn_state, aux_data
 
 if __name__ == "__main__":
     args = tyro.cli(Args)
@@ -397,17 +332,20 @@ if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() and args.cuda else "cpu")
 
     # env setup
+    env_type = get_env_type(args.env_id)
     env, episode_len = create_env(args.env_id, args.corridor_length)
-    env = wrap_env(env)
+    # env = wrap_env(env, env_type)
     envs = gym.vector.SyncVectorEnv(
-        [make_env(args.env_id, args.corridor_length) for i in range(args.num_envs)],
+        [make_env(args.env_id, args.corridor_length, env_type) for i in range(args.num_envs)],
         autoreset_mode=gym.vector.AutoresetMode.SAME_STEP
     )
-    assert isinstance(envs.single_action_space, gym.spaces.Discrete), "only discrete action space is supported"
+    # envs = wrap_env(envs, env_type)
+    
+    # assert isinstance(envs.single_action_space, gym.spaces.Discrete), "only discrete action space is supported"
 
-    agent = Agent(
-        n_obs=np.prod(envs.single_observation_space.shape), 
-        n_actions=envs.single_action_space.n,
+    agent = create_agent(
+        envs=envs,
+        env_type=env_type,
         rnn_unit=args.rnn_type, 
         arch=args.arch,
         d_model=args.hidden_size, 
@@ -418,6 +356,8 @@ if __name__ == "__main__":
     optimizer = optim.Adam(agent.parameters(), lr=args.learning_rate, eps=1e-5)
     num_params = sum(p.numel() for p in agent.parameters() if p.requires_grad)
     print("Number of parameters:", num_params)
+
+    
 
     # ALGO Logic: Storage setup
     obs = torch.zeros((args.num_steps, args.num_envs) + envs.single_observation_space.shape).to(device)
@@ -504,16 +444,16 @@ if __name__ == "__main__":
             t0 = time.time()
             with torch.no_grad():
                 action, logprob, _, actor_rnn_state_env_lv, aux_data_rollout = agent.get_action(
-                    obs_curr,
-                    actor_rnn_state_env_lv,
-                    next_done,
+                    x=obs_curr,
+                    rnn_state=actor_rnn_state_env_lv,
+                    done=next_done,
                     rnn_burnin=0.0,
                     batch_size=args.num_envs,
                 )
                 value, critic_rnn_state_env_lv = agent.get_value(
-                    obs_curr,
-                    critic_rnn_state_env_lv,
-                    next_done,
+                    x=obs_curr,
+                    rnn_state=critic_rnn_state_env_lv,
+                    done=next_done,
                     rnn_burnin=0.0,
                     batch_size=args.num_envs,
                 )
@@ -528,20 +468,21 @@ if __name__ == "__main__":
             obs_curr, reward, terminations, truncations, infos = envs.step(action.cpu().numpy())
             next_done = np.logical_or(terminations, truncations)
             next_state = get_unwrapped_state(envs.envs[0], obs_curr[0])
-            episode_trajectory.append(
-                {
-                    "s": prev_state,
-                    "a": int(action[0].item()),
-                    "r": float(reward[0]),
-                    "s_prime": next_state,
-                    "done": bool(next_done[0]),
-                }
-            )
+            if env_type in ['custom']:
+                episode_trajectory.append(
+                    {
+                        "s": prev_state,
+                        "a": int(action[0].item()) if len(action.shape) == 1 else [f"{v:.2f}" for v in action[0].tolist()],
+                        "r": float(reward[0]),
+                        "s_prime": next_state,
+                        "done": bool(next_done[0]),
+                    }
+                )
             rewards[step] = torch.tensor(reward).to(device).view(-1)
             actual_next_obs = np.copy(obs_curr)
 
             assert next_done.any() == ("final_obs" in infos)
-            if "final_obs" in infos:
+            if "final_obs" in infos and '_episode' in infos['final_info']:
                 for env_idx in range(len(infos["final_obs"])):
                     if infos['final_info']["_episode"][env_idx]:
                         actual_next_obs[env_idx] = infos["final_obs"][env_idx]
@@ -551,7 +492,7 @@ if __name__ == "__main__":
                         episode_returns.append(total_return)
                         if env_idx == 0:
                             env0_episode_count += 1
-                            if rollout_log_interval > 0 and env0_episode_count % rollout_log_interval == 0:
+                            if rollout_log_interval > 0 and episode_trajectory and env0_episode_count % rollout_log_interval == 0:
                                 print(f"\nEnv0 episode {env0_episode_count} rollout (return {total_return:.2f}):")
                                 for t, transition in enumerate(episode_trajectory):
                                     print(f"  t={t}: {transition}")
@@ -615,9 +556,9 @@ if __name__ == "__main__":
         agent.eval()
         with torch.no_grad():
             next_value, _= agent.get_value(
-                next_obs[-1],
-                critic_rnn_state_env_lv,
-                next_done,
+                x=next_obs[-1],
+                rnn_state=critic_rnn_state_env_lv,
+                done=next_done,
                 rnn_burnin=0.0,
                 batch_size=args.num_envs,
             )
@@ -680,18 +621,18 @@ if __name__ == "__main__":
                     )
                 )
                 _, newlogprob, entropy, _, aux_data = agent.get_action(
-                    b_obs[mb_inds],
-                    mb_actor_rnn_state,
-                    b_dones[mb_inds],
-                    b_actions[mb_inds],
+                    x=b_obs[mb_inds],
+                    rnn_state=mb_actor_rnn_state,
+                    done=b_dones[mb_inds],
+                    action=b_actions[mb_inds],
                     rnn_burnin=args.rnn_burnin,
                     batch_size=seqsperminibatch,
                     track_seq_grad=track_seq_grad,
                 )
                 newvalue, _ = agent.get_value(
-                    b_obs[mb_inds],
-                    mb_critic_rnn_state,
-                    b_dones[mb_inds],
+                    x=b_obs[mb_inds],
+                    rnn_state=mb_critic_rnn_state,
+                    done=b_dones[mb_inds],
                     rnn_burnin=args.rnn_burnin,
                     batch_size=seqsperminibatch,
                     track_seq_grad=track_seq_grad,
@@ -778,7 +719,7 @@ if __name__ == "__main__":
         steps_since_last_log = global_step - last_step_count
         
         sps = steps_since_last_log / elapsed_time if elapsed_time > 0 else 0
-        avg_reward = sum(episode_returns) / episodes_since_log if episodes_since_log > 0 else 0
+        avg_reward = sum(episode_returns) / episodes_since_log if episodes_since_log > 0 else np.nan
         iteration_returns.append(avg_reward)
         iteration_timesteps.append(global_step)
         tracking_history["iterations"].append(iteration)
@@ -790,8 +731,7 @@ if __name__ == "__main__":
         tracking_history["seq_grad_norms"].append(iter_seq_grad_norms)
 
         # if iteration % 20 == 0:
-        if iteration % 20 == 0:
-            print(f"{iteration}/{args.num_iterations} (Episode {episode_count}, Step {global_step}): SPS={int(sps)}, avg_return={avg_reward:.2f}\n")
+        print(f"{iteration}/{args.num_iterations} (Episode {episode_count}, Step {global_step}): SPS={int(sps)}, avg_return={avg_reward:.2f}\n")
         # timing_breakdown = ", ".join([f"{k}={v/elapsed_time*100:.1f}%" for k, v in timing_stats.items()])
         # print(f"Timing breakdown: {timing_breakdown}")
         

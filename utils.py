@@ -1,4 +1,5 @@
 import torch
+import gymnasium as gym
 
 def format_aux(aux, decimals=1):
     if isinstance(aux, dict):
@@ -17,3 +18,18 @@ def format_aux(aux, decimals=1):
     if isinstance(aux, float):
         return f"{aux:.{decimals}f}"
     return aux
+
+def get_env_type(env_id):
+    try:
+        spec = gym.spec(env_id)
+    except Exception:
+        return "custom"
+    ep = (spec.entry_point or "").lower()
+
+    if "ale_py" in ep:
+        return "ale_py"
+    elif 'mujoco' in ep:
+        return "mujoco"
+    elif 'classic_control' in ep:
+        return 'classic_control'
+    return "custom"
