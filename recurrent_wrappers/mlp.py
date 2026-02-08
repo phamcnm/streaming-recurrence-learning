@@ -10,8 +10,8 @@ class MLP(nn.Module):
 
     def forward(self, x, h=None):
         x = self.ln1(x) if self.layernorm else x
-        x = F.leaky_relu(x)
+        x = F.relu(x)
         x = self.fc(x)
         x = self.ln2(x) if self.layernorm else x
-        x = F.leaky_relu(x)
+        x = F.relu(x)
         return x, None, None
