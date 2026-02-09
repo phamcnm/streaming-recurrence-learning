@@ -1,4 +1,3 @@
-from recurrent_wrappers import mynet_glu
 from recurrent_wrappers.mlp import MLP
 from recurrent_wrappers.gru import GRUWrapper
 from recurrent_wrappers.mynet_glu import MyNetGLU
@@ -8,8 +7,9 @@ from recurrent_wrappers.mynet import MyNet
 from recurrent_wrappers.bestnet import BestNet
 from recurrent_wrappers.simba import SimbaWrapper
 from recurrent_wrappers.memora import Memora
+from recurrent_wrappers.bestnet_bilinear import BestNetBilinear
 
-WRAPPERS = (SimpleLRUWrapper, SimbaWrapper, MyNet, BestNet, MyNetGLU)
+WRAPPERS = (SimpleLRUWrapper, SimbaWrapper, MyNet, BestNet, MyNetGLU, BestNetBilinear)
 arch_map = {
     'simple':      SimpleLRUWrapper,
     'mynet':       MyNet,
@@ -17,6 +17,7 @@ arch_map = {
     'simba':       SimbaWrapper,
     'memora':      Memora,
     'mynet_glu':   MyNetGLU,
+    'bestnet_bilinear': BestNetBilinear,
 }
 
 def create_model(name, embed_dim, hidden_dim, arch='mynet', rnn_mode='act', use_layernorm=False):
