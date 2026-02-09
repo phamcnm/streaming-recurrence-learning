@@ -15,16 +15,18 @@ class SimbaWrapper(nn.Module):
         mode='sequential', 
         ponder_eps=0.1, 
         ponder_n=4, 
-        layernorm=True,
+        use_layernorm=True,
+        use_nonlinearity=True,
+        **kwargs,
     ):
         super().__init__()
         self.mode = mode
         self.ln1 = nn.LayerNorm(d_model)
         self.ln3 = nn.LayerNorm(d_model)
-        self.layernorm = layernorm
-        if layernorm:
+        self.use_layernorm = use_layernorm
+        if use_layernorm:
             self.ln2 = nn.LayerNorm(d_state)
-            
+        self.use_nonlinearity = use_nonlinearity
         
         self.rnn = LRU_MAPPING[recurrent_unit](
             in_features=d_model,
@@ -56,8 +58,9 @@ class SimbaWrapper(nn.Module):
             else:
                 aux = summary
         
-        x = self.ln2(x) if self.layernorm else x
-        x = F.leaky_relu(x)
+        x = self.ln2(x) if self.use_layernorm else x
+        if self.use_nonlinearity:
+            x = F.leaky_relu(x)
         rnn_out = x if track_activity else None
         x = self.mlp(x)
         x = x + skip

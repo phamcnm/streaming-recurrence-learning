@@ -50,7 +50,7 @@ class AgentDiscrete(nn.Module):
             hidden_dim=d_state,
             arch=arch,
             rnn_mode=rnn_mode,
-            layernorm=False)
+            use_layernorm=True)
         self.actor_readout = layer_init(nn.Linear(self.outdim, n_actions), std=0.01)
         self.actor.apply(init_weights)
 
@@ -61,7 +61,7 @@ class AgentDiscrete(nn.Module):
             hidden_dim=d_state,
             arch=arch,
             rnn_mode=rnn_mode,
-            layernorm=False)
+            use_layernorm=True)
         self.critic_readout = layer_init(nn.Linear(self.outdim, 1), std=1.0)
         self.critic.apply(init_weights)
         

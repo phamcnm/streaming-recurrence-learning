@@ -15,7 +15,7 @@ class Agent(nn.Module):
             hidden_dim=hidden_dim,
             arch='memora',
             rnn_mode=rnn_mode,
-            layernorm=False
+            use_layernorm=False
         )
         self.readout = nn.Linear(rnn_out_dim, output_dim)
 

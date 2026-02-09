@@ -3,7 +3,7 @@ import os, pickle, sys
 import random
 import time
 from dataclasses import dataclass, field, asdict
-from typing import List
+from typing import List, Annotated
 
 import gymnasium as gym
 import ale_py
@@ -25,6 +25,8 @@ torch.set_num_threads(1)
 
 from stream_components.normalization_wrappers import NormalizeObservation, ScaleReward
 from aux_wrappers.previous_action_wrapper import PreviousAction
+from aux_wrappers.previous_reward_wrapper import PreviousReward
+from aux_wrappers.previous_done_wrapper import PreviousDone
 from aux_wrappers.atari_wrappers import (  # isort:skip
     ClipRewardEnv,
     EpisodicLifeEnv,
@@ -52,7 +54,7 @@ class Args:
     """whether to save model into the `runs/{run_name}` folder"""
 
     # Algorithm specific arguments
-    env_id: str = "Acrobot-v1"
+    env_id: str = "RepeatFirst"
     """the id of the environment"""
     corridor_length: int = 10
     """corridor length for TMaze"""
@@ -84,7 +86,7 @@ class Args:
     """the surrogate clipping coefficient"""
     clip_vloss: bool = True
     """Toggles whether or not to use a clipped loss for the value function, as per the paper."""
-    ent_coef: float = 0.1
+    ent_coef: float = 0.01
     """coefficient of the entropy"""
     vf_coef: float = 0.5
     """coefficient of the value function"""
@@ -107,8 +109,16 @@ class Args:
     use_default_hyperparams: bool = False
     """set hyperparameters to preset values, mostly to reproduce baselines' performance"""
 
+    # optional observation features
+    use_prev_action: Annotated[bool, tyro.conf.arg(aliases=["-pa"])] = False
+    """append previous action to observation (custom envs only)"""
+    use_prev_reward: Annotated[bool, tyro.conf.arg(aliases=["-pr"])] = False
+    """append previous reward to observation (custom envs only)"""
+    use_prev_done: Annotated[bool, tyro.conf.arg(aliases=["-pd"])] = False
+    """append previous done to observation (custom envs only)"""
+
     # architecture
-    arch: str = "bestnet"
+    arch: str = "mynet_glu"
     """deep neural architecture"""
     rnn_type: str = "glru"
     """memory type of the agent"""
@@ -155,7 +165,7 @@ def create_env(env_id, seq_len=10):
         episode_len = None
     return env, episode_len
 
-def wrap_env(env, env_type):
+def wrap_env(env, env_type, args: Args = None):
     if env_type == 'ale_py':
         env = gym.wrappers.RecordEpisodeStatistics(env)
         env = NoopResetEnv(env, noop_max=30)
@@ -180,15 +190,23 @@ def wrap_env(env, env_type):
     else:
         env = gym.wrappers.FlattenObservation(env)
         env = gym.wrappers.RecordEpisodeStatistics(env)
-        env = ScaleReward(env, gamma=0.99)
         env = NormalizeObservation(env)
-        env = PreviousAction(env, mode="concat")
+        use_prev_action = False if args is None else args.use_prev_action
+        use_prev_reward = False if args is None else args.use_prev_reward
+        use_prev_done = False if args is None else args.use_prev_done
+        if use_prev_action:
+            env = PreviousAction(env, mode="concat")
+        if use_prev_reward:
+            env = PreviousReward(env, mode="concat")
+        if use_prev_done:
+            env = PreviousDone(env, mode="concat")
+        env = ScaleReward(env, gamma=0.99)
     return env
 
-def make_env(env_id, seq_len=10, env_type='custom'):
+def make_env(env_id, seq_len=10, env_type='custom', args: Args = None):
     def thunk():
         env, _ = create_env(env_id, seq_len=seq_len)
-        env = wrap_env(env, env_type)
+        env = wrap_env(env, env_type, args)
         return env
     return thunk
 
@@ -344,14 +362,10 @@ if __name__ == "__main__":
     # env setup
     env_type = get_env_type(args.env_id)
     env, episode_len = create_env(args.env_id, args.corridor_length)
-    # env = wrap_env(env, env_type)
     envs = gym.vector.SyncVectorEnv(
-        [make_env(args.env_id, args.corridor_length, env_type) for i in range(args.num_envs)],
+        [make_env(args.env_id, args.corridor_length, env_type, args) for i in range(args.num_envs)],
         autoreset_mode=gym.vector.AutoresetMode.SAME_STEP
     )
-    # envs = wrap_env(envs, env_type)
-    
-    # assert isinstance(envs.single_action_space, gym.spaces.Discrete), "only discrete action space is supported"
 
     agent = create_agent(
         envs=envs,
@@ -366,8 +380,6 @@ if __name__ == "__main__":
     optimizer = optim.Adam(agent.parameters(), lr=args.learning_rate, eps=1e-5)
     num_params = sum(p.numel() for p in agent.parameters() if p.requires_grad)
     print("Number of parameters:", num_params)
-
-    
 
     # ALGO Logic: Storage setup
     obs = torch.zeros((args.num_steps, args.num_envs) + envs.single_observation_space.shape).to(device)

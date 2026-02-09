@@ -142,8 +142,9 @@ class Memora(nn.Module):
     def __init__(self, recurrent_unit='lru',
                  d_model=64, d_state=128, num_layers=1, dropout=0.0,
                  activation=F.gelu, gated_mlp_expansion=2, bias=False, inner_loops: int = 1,
-                 mode='sequential', ponder_eps=0.1, ponder_n=4, layernorm=True,):
+                 mode='sequential', ponder_eps=0.1, ponder_n=4, use_layernorm=True, **kwargs):
         super().__init__()
+        self.use_layernorm = use_layernorm
         if recurrent_unit is None:
             raise ValueError("recurrent_unit must be specified")
         # self.input_proj = nn.Linear(input_size, d_model, bias=bias)
@@ -181,7 +182,7 @@ class Memora(nn.Module):
             if module.bias is not None:
                 torch.nn.init.zeros_(module.bias)
 
-    def forward(self, x, hidden=None, done=None, apply_change=True, inner_loops: Optional[int] = None):
+    def forward(self, x, hidden=None, done=None, apply_change=True, inner_loops: Optional[int] = None, **kwargs):
         # x = self.input_proj(x)  # [seq_len, batch_size, hidden_size]
         x = self.input_norm(x)
 

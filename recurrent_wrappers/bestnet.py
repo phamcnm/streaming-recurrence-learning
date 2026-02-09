@@ -15,15 +15,18 @@ class BestNet(nn.Module):
         mode='sequential', 
         ponder_eps=0.1, 
         ponder_n=4, 
-        layernorm=True,
+        use_layernorm=True,
+        use_nonlinearity=True,
+        **kwargs,
     ):
         super().__init__()
         self.mode = mode
-        self.layernorm = layernorm
-        if layernorm:
+        self.use_layernorm = use_layernorm
+        if use_layernorm:
             self.ln1 = nn.LayerNorm(d_model)
             self.ln2 = nn.LayerNorm(d_state)
             self.ln3 = nn.LayerNorm(d_model)
+        self.use_nonlinearity = use_nonlinearity
         
         self.rnn = LRU_MAPPING[recurrent_unit](
             in_features=d_model,
@@ -39,9 +42,10 @@ class BestNet(nn.Module):
         self._last_seq_grad = None
 
     def forward(self, x, hidden=None, done=None, track_seq_grad=False, track_activity=False, **kwargs):
-        x = self.ln1(x) if self.layernorm else x
+        x = self.ln1(x) if self.use_layernorm else x
         skip = x.clone()  # [seq_len, batch, d_model]
-        x = F.leaky_relu(x)
+        if self.use_nonlinearity:
+            x = F.leaky_relu(x)
         
         if track_seq_grad:
             x.retain_grad()
@@ -56,11 +60,12 @@ class BestNet(nn.Module):
             else:
                 aux = summary
         
-        x = self.ln2(x) if self.layernorm else x
-        x = F.leaky_relu(x)
+        x = self.ln2(x) if self.use_layernorm else x
+        if self.use_nonlinearity:
+            x = F.leaky_relu(x)
         rnn_out = x if track_activity else None
         x = self.mlp(x)
-        x = self.ln3(x) if self.layernorm else x
+        x = self.ln3(x) if self.use_layernorm else x
         # x = F.leaky_relu(x)
         mlp_out = x if track_activity else None
         x = x + skip

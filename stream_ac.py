@@ -80,7 +80,7 @@ class Actor(nn.Module):
             arch=arch,
             hidden_dim=d_state,
             rnn_mode=ponder_mode,
-            layernorm=True
+            use_layernorm=True
         )
         self.fc_pi = nn.Linear(rnn_dim, n_actions)
         self.apply(initialize_weights)
@@ -111,7 +111,7 @@ class Critic(nn.Module):
             arch=arch,
             hidden_dim=d_state,
             rnn_mode=ponder_mode,
-            layernorm=True
+            use_layernorm=True
         )
         self.x = None # penultimate output
         if self.use_q_head:

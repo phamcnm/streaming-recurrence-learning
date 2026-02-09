@@ -1,9 +1,10 @@
+import torch
 import torch.nn as nn
 from recurrent_units.mapping import LRU_MAPPING
 import torch.nn.functional as F
 
 
-class MyNet(nn.Module):
+class MyNetGLU(nn.Module):
     # LN -> skip -> Activation -> RNN -> LN -> Activation -> MLP -> LN -> add skip
     def __init__(
         self, 
@@ -25,7 +26,9 @@ class MyNet(nn.Module):
         if use_layernorm:
             self.ln1 = nn.LayerNorm(d_model)
             self.ln2 = nn.LayerNorm(d_state)
-            self.ln3 = nn.LayerNorm(d_model)
+            self.ln3 = nn.LayerNorm(d_model, elementwise_affine=False)
+            self.ln4 = nn.LayerNorm(d_model, elementwise_affine=False)
+            self.ln5 = nn.LayerNorm(d_model, elementwise_affine=False)
         self.use_nonlinearity = use_nonlinearity
         
         self.rnn = LRU_MAPPING[recurrent_unit](
@@ -39,6 +42,7 @@ class MyNet(nn.Module):
             # max_steps=ponder_n,
         )
         self.mlp = nn.Linear(d_state, d_model)
+        self.mlp_gate = nn.Linear(d_state, d_model)
         self._last_seq_grad = None
 
     def forward(self, x, hidden=None, done=None, track_seq_grad=False, track_activity=False, **kwargs):
@@ -63,12 +67,20 @@ class MyNet(nn.Module):
         if self.use_nonlinearity:
             x = F.leaky_relu(x)
         rnn_out = x if track_activity else None
+        # GLU component until skip
+        glu_in = x
         x = self.mlp(x)
         x = self.ln3(x) if self.use_layernorm else x
         if self.use_nonlinearity:
-            x = F.leaky_relu(x)
+            gate = self.mlp_gate(glu_in)
+            gate = self.ln4(gate) if self.use_layernorm else gate
+            gate = torch.sigmoid(gate)
+        else:
+            gate = 1.0
+        x = x * gate
         mlp_out = x if track_activity else None
         x = x + skip
+        x = self.ln5(x) if self.use_layernorm else x
 
         if track_activity:
             activity = {"rnn_out": rnn_out, "mlp_out": mlp_out}
