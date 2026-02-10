@@ -18,6 +18,8 @@ from recurrent_wrappers.create_models import create_model, WRAPPERS
 import matplotlib.pyplot as plt
 
 from aux_wrappers.previous_action_wrapper import PreviousAction
+from aux_wrappers.previous_reward_wrapper import PreviousReward
+from aux_wrappers.previous_done_wrapper import PreviousDone
 torch.set_num_threads(1)
 
 def initialize_weights(m):
@@ -335,7 +337,8 @@ def create_env(env_id, seq_len=10, render=False):
 def main(exp_id, exp_name, seed, env_id, seq_len, total_timesteps, total_episodes, log_interval,
         lr, gamma, lamda,  entropy_coeff, d_model, d_state, kappa_policy, kappa_value,
         arch, recurrent_unit, ponder_mode, ponder_eps, ponder_n, inner_loops, repeat_mode,
-        params_to_track, args, overshooting_info, use_prev_action=False, debug=False, render=False):
+        params_to_track, args, overshooting_info, use_prev_action=False, use_prev_reward=False,
+        use_prev_done=False, debug=False, render=False):
     if debug:
         showfig = True
         if showfig:
@@ -351,10 +354,14 @@ def main(exp_id, exp_name, seed, env_id, seq_len, total_timesteps, total_episode
     env, episode_len = create_env(env_id, seq_len, render)
     env = gym.wrappers.FlattenObservation(env)
     env = gym.wrappers.RecordEpisodeStatistics(env)
-    env = ScaleReward(env, gamma=gamma)
     env = NormalizeObservation(env)
     if use_prev_action:
         env = PreviousAction(env, mode="concat")
+    if use_prev_reward:
+        env = PreviousReward(env, mode="concat")
+    if use_prev_done:
+        env = PreviousDone(env, mode="concat")
+    env = ScaleReward(env, gamma=gamma)
     env = AddTimeInfo(env, time_limit=episode_len)
     policy_hidden, value_hidden = None, None
     agent = StreamAC(
@@ -590,7 +597,9 @@ if __name__ == '__main__':
     parser.add_argument('--grad_log_interval', type=int, default=0, help='Log LRU grad norms every N updates (0 disables)')
     parser.add_argument('--seq_grad_log_interval', type=int, default=0, help='Log per-timestep grad norms every N updates (0 disables)')
     parser.add_argument('--overshooting_info', action='store_true')
-    parser.add_argument('--use_prev_action', action='store_true')
+    parser.add_argument('--use_prev_action', '-pa', action='store_true')
+    parser.add_argument('--use_prev_reward', '-pr', action='store_true')
+    parser.add_argument('--use_prev_done', '-pd', action='store_true')
     parser.add_argument('--debug', action='store_true')
     parser.add_argument('--render', action='store_true')
     args = parser.parse_args()
@@ -599,4 +608,4 @@ if __name__ == '__main__':
     main(args.exp_id, args.exp_name, args.seed, args.env_id, args.seq_len, args.total_timesteps, args.total_episodes, args.log_interval,
          args.lr, args.gamma, args.lamda, args.entropy_coeff, args.d_model, args.d_state, args.kappa_policy, args.kappa_value, 
          args.arch, args.rnn_type, args.ponder_mode, args.ponder_eps, args.ponder_n, args.inner_loops, args.repeat_mode, args.params_to_track,
-         args, args.overshooting_info, args.use_prev_action, args.debug, args.render)
+         args, args.overshooting_info, args.use_prev_action, args.use_prev_reward, args.use_prev_done, args.debug, args.render)
