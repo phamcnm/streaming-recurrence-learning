@@ -8,6 +8,7 @@ from recurrent_wrappers.bestnet import BestNet
 from recurrent_wrappers.simba import SimbaWrapper
 from recurrent_wrappers.memora import Memora
 from recurrent_wrappers.bestnet_bilinear import BestNetBilinear
+from recurrent_units.mapping import LRU_MAPPING
 
 WRAPPERS = (SimpleLRUWrapper, SimbaWrapper, MyNet, BestNet, MyNetGLU, BestNetBilinear)
 arch_map = {
@@ -19,8 +20,9 @@ arch_map = {
     'mynet_glu':   MyNetGLU,
     'bestnet_bilinear': BestNetBilinear,
 }
+default_arch = 'bestnet'
 
-def create_model(name, embed_dim, hidden_dim, arch='mynet', rnn_mode='act', use_layernorm=False):
+def create_model(name, embed_dim, hidden_dim, arch=default_arch, rnn_mode='sequential', use_layernorm=False):
     # return the rnn component and output dim
     if arch == 'none':
         if name == "mlp":
@@ -30,8 +32,11 @@ def create_model(name, embed_dim, hidden_dim, arch='mynet', rnn_mode='act', use_
         elif name == "gru":
             return GRUWrapper(embed_dim, hidden_dim, use_layernorm=use_layernorm), hidden_dim
         else:
-            raise ValueError(name)
-    else:
+            if name in LRU_MAPPING:
+                arch = default_arch
+            else:
+                raise ValueError(name)
+    if arch != 'none':
         arch_wrapper = arch_map[arch]
         use_nonlinearity = name not in ['gru', 'rnn']
         return arch_wrapper(

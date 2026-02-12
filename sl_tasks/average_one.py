@@ -52,14 +52,24 @@ class AvgSequenceDataset(Dataset):
         y = y / torch.arange(1, self.seq_len + 1, dtype=torch.float)
         return x, y
     
-def train(model, seq_len, vocab_size=vocab_size, num_samples=10000, num_epochs=10, act_loss_coeff=0.01):
+def train(
+    model,
+    seq_len,
+    vocab_size=vocab_size,
+    num_samples=10000,
+    num_epochs=10,
+    act_loss_coeff=0.01,
+    return_loss_history=False,
+):
     dataset = AvgSequenceDataset(num_samples=num_samples, seq_len=seq_len, vocab_size=vocab_size)
     loader = DataLoader(dataset, batch_size=32, shuffle=True)
     optimizer = torch.optim.Adam(model.parameters(), lr=3e-4)
     loss_fn = nn.MSELoss()
+    loss_history = []
     for epoch in range(num_epochs):
         epoch_aux_accumulator = None
         num_batches = 0
+        epoch_loss_sum = 0.0
         for x, y in loader:
             x, y = x.transpose(0, 1), y.transpose(0, 1)  # (B, T) -> (T, B)
             preds, hidden, aux = model(x)
@@ -70,6 +80,8 @@ def train(model, seq_len, vocab_size=vocab_size, num_samples=10000, num_epochs=1
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
+            epoch_loss_sum += float(loss.item())
+            num_batches += 1
 
             summary = aux.get("summary") if isinstance(aux, dict) else aux
             if isinstance(summary, list):
@@ -77,10 +89,13 @@ def train(model, seq_len, vocab_size=vocab_size, num_samples=10000, num_epochs=1
                     epoch_aux_accumulator = [0.0] * len(summary)
                 for i, val in enumerate(summary):
                     epoch_aux_accumulator[i] += val
-                num_batches += 1
         if epoch_aux_accumulator is not None and num_batches > 0:
             avg_aux = [val / num_batches for val in epoch_aux_accumulator]
             print(f"Epoch {epoch}: avg_aux = {format_aux(avg_aux)}")
+        if num_batches > 0:
+            loss_history.append(epoch_loss_sum / num_batches)
+    if return_loss_history:
+        return model, loss_history
     return model
 
 @torch.no_grad()
