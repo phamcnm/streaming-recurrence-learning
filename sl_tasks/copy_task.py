@@ -96,6 +96,8 @@ def train(
     num_epochs=10,
     act_loss_coeff=0.01,
     return_loss_history=False,
+    val_split=0.2,
+    val_seed=1234,
 ):
     T = seq_len
     batch_size = 32
@@ -107,10 +109,28 @@ def train(
         one_hot=one_hot,
         variable_k=variable_k,
     )
-    loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
+    import random
+    import numpy as np
+    rng_state = torch.random.get_rng_state()
+    py_state = random.getstate()
+    np_state = np.random.get_state()
+    torch.manual_seed(val_seed)
+    random.seed(val_seed)
+    np.random.seed(val_seed)
+    samples = [dataset[i] for i in range(num_samples)]
+    torch.random.set_rng_state(rng_state)
+    random.setstate(py_state)
+    np.random.set_state(np_state)
+    split_idx = int((1 - val_split) * num_samples)
+    train_samples = samples[:split_idx]
+    val_samples = samples[split_idx:]
+    loader = DataLoader(train_samples, batch_size=batch_size, shuffle=True)
+    val_loader = DataLoader(val_samples, batch_size=batch_size, shuffle=False)
     optimizer = torch.optim.Adam(model.parameters(), lr=3e-4)
     loss_fn = nn.CrossEntropyLoss()
     loss_history = []
+    val_loss_history = []
+    val_acc_history = []
     for epoch in range(num_epochs):
         epoch_aux_accumulator = None
         num_batches = 0
@@ -139,8 +159,36 @@ def train(
             print(f"Epoch {epoch}: avg_aux = {format_aux(avg_aux)}")
         if num_batches > 0:
             loss_history.append(epoch_loss_sum / num_batches)
+        if val_loader is not None and len(val_samples) > 0:
+            val_loss_sum = 0.0
+            val_batches = 0
+            with torch.no_grad():
+                for x, y in val_loader:
+                    x, y = x.transpose(0, 1), y.transpose(0, 1)
+                    logits, hidden, aux = model(x)
+                    L, B, V = logits.shape
+                    val_loss = loss_fn(logits.reshape(L*B, V), y.reshape(L*B))
+                    if isinstance(aux, dict) and aux.get("ponder_cost") is not None:
+                        val_loss = val_loss + act_loss_coeff * aux["ponder_cost"]
+                    val_loss_sum += float(val_loss.item())
+                    val_batches += 1
+            val_loss_history.append(val_loss_sum / val_batches if val_batches > 0 else None)
+            val_acc = evaluate(
+                model,
+                seq_len,
+                vocab_size=vocab_size,
+                S=S,
+                one_hot=one_hot,
+                variable_k=variable_k,
+                show_results=False,
+                loader=val_loader,
+            )
+            val_acc_history.append(val_acc)
+        else:
+            val_loss_history.append(None)
+            val_acc_history.append(None)
     if return_loss_history:
-        return model, loss_history
+        return model, loss_history, val_loss_history, val_acc_history
     return model
 
 @torch.no_grad()
@@ -153,7 +201,21 @@ def evaluate(
     variable_k=False,
     n=20,
     show_results=True,
+    loader=None,
 ):
+    if loader is not None:
+        success = 0
+        total = 0
+        for x, y in loader:
+            x, y = x.transpose(0, 1), y.transpose(0, 1)
+            logits, hidden, aux = model(x)
+            preds = logits.argmax(-1)
+            if preds.shape != y.shape:
+                preds = preds.view_as(y)
+            ok = (preds == y).all(dim=0)
+            success += ok.sum().item()
+            total += y.shape[1]
+        return success / total if total > 0 else 0.0
     T = seq_len
     success = 0
     for _ in range(n):

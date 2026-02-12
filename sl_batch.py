@@ -47,9 +47,9 @@ def run_experiment(
         seq_lens=[40], rnn_list=['lru', 'glru'], rnn_mode='sequential',
         train_kwargs=None, eval_kwargs=None, task_name=None, vocab_size=None,
         arch="none",
-        exp_id=None, exp_desc=None, input_is_one_hot=False
+        exp_id=None, exp_desc=None, input_is_one_hot=False, seed=None
     ):
-    seeds = list(range(num_seeds))
+    seeds = [seed] if seed is not None else list(range(num_seeds))
 
     embed_dim = input_dim if input_is_one_hot else 64
     hidden_dim = 128
@@ -75,6 +75,8 @@ def run_experiment(
                     input_is_one_hot=input_is_one_hot,
                 )
                 loss_history = None
+                val_loss_history = None
+                val_acc_history = None
                 try:
                     train_out = train(
                         model,
@@ -85,7 +87,12 @@ def run_experiment(
                 except TypeError:
                     train_out = train(model, seq_len=seq_len, **train_kwargs)
                 if isinstance(train_out, tuple):
-                    model, loss_history = train_out
+                    if len(train_out) == 4:
+                        model, loss_history, val_loss_history, val_acc_history = train_out
+                    elif len(train_out) == 3:
+                        model, loss_history, val_loss_history = train_out
+                    else:
+                        model, loss_history = train_out
                 else:
                     model = train_out
                 score = evaluate(model, seq_len, show_results=seed==0, **eval_kwargs)
@@ -109,7 +116,9 @@ def run_experiment(
                     with open(seed_path, "wb") as f:
                         pickle.dump(
                             {
-                                "losses": loss_history,
+                                "train_losses": loss_history,
+                                "val_losses": val_loss_history,
+                                "val_accs": val_acc_history,
                                 "eval_score": score,
                             },
                             f,
@@ -219,6 +228,7 @@ def run_task(
     one_hot=False,
     variable_k=False,
     cli_args=None,
+    seed=None,
 ):
     task = load_task(task_name, vocab_size=vocab_size)
     train_kwargs = dict(task.get("train_kwargs") or {})
@@ -302,6 +312,7 @@ def run_task(
         exp_id=exp_id,
         exp_desc=exp_desc,
         input_is_one_hot=task.get("input_is_one_hot", False),
+        seed=seed,
     )
 
 if __name__ == "__main__":
@@ -310,14 +321,15 @@ if __name__ == "__main__":
     parser.add_argument("--task", type=str, default="copy_task")
     parser.add_argument("--vocab-size", type=int, default=2)
     parser.add_argument("--num-seeds", type=int, default=1)
+    parser.add_argument("--seed", type=int, default=1)
     parser.add_argument("--seq-lens", type=int, nargs="*", default=[7, 10])
     parser.add_argument("--rnn-list", type=str, nargs="*", default=['gru', 'glru'])
     parser.add_argument("--rnn-mode", type=str, default="sequential")
     parser.add_argument("--arch", type=str, default="none")
     parser.add_argument("--exp-id", type=int, default=0)
     parser.add_argument("--exp-desc", type=str, default=None)
-    parser.add_argument("--num-epochs", type=int, default=10)
-    parser.add_argument("--num-samples", type=int, default=10000)
+    parser.add_argument("--num-epochs", type=int, default=20)
+    parser.add_argument("--num-samples", type=int, default=25000)
     parser.add_argument("--one-hot", action="store_true")
     parser.add_argument("--variable-k", action="store_true")
     
@@ -337,4 +349,5 @@ if __name__ == "__main__":
         one_hot=args.one_hot,
         variable_k=args.variable_k,
         cli_args=args,
+        seed=args.seed,
     )
